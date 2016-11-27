@@ -8,26 +8,53 @@ import qualified Data.Either.Validation as V
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Map as Map
-import qualified Data.Sequence as Seq
+import qualified Data.Set as Set
 
 newtype PitchRatio = PitchRatio (Ratio Int) deriving (Eq, Ord, Show)
+
 newtype Octave = Octave Int deriving (Eq, Ord, Show)
-newtype Duration = Duration (Ratio Int) deriving (Eq, Ord, Show)
-newtype Onset = Onset (Ratio Int) deriving (Eq, Ord, Show)
-newtype TimePoint = TimePoint (Ratio Int) deriving (Eq, Ord, Show)
 
 data Pitch = Pitch {
   ratio      :: PitchRatio,
   octave     :: Octave
   } deriving (Eq, Ord, Show)
 
-data Envelope =
-  Impulse
-  | Sustained
-  deriving (Eq, Show)
+newtype Velocity = Velocity Int deriving (Eq, Ord, Show)
+
+newtype TimePoint = TimePoint (Ratio Int) deriving (Eq, Ord, Show)
+
+newtype Duration = Duration (Ratio Int) deriving (Eq, Ord, Show)
+
+data Envelope = Impulse | Sustained deriving (Eq, Show)
 
 data Instrument = Instrument {
   range :: (Int, Int)
+  } deriving (Eq, Show)
+
+data Sound = Sound {
+  pitch       :: Pitch,
+  velocity    :: Velocity,
+  start       :: TimePoint,
+  stop        :: TimePoint,
+  minDuration :: Duration,
+  maxDuration :: Duration,
+  envelope    :: Envelope,
+  instrument  :: Instrument
+  } deriving (Eq, Show)
+
+newtype Instruments = Instruments (Map Text Instrument) deriving Show
+
+data SoundErrors =
+  PitchRatioInvalid PitchRatio
+  | VelocityRangeError Velocity
+  | OctaveRangeError Octave
+  | DurationRangeError Duration
+  | NoInstrumentError Text
+  deriving (Ord, Eq, Show)
+
+data Chord = Chord {
+  deltaDuration :: Duration,
+  notes         :: [Sound]
   } deriving Show
 
 instance A.FromJSON Instrument where
@@ -36,96 +63,103 @@ instance A.FromJSON Instrument where
      v A..: "range"
    parseJSON _ = mzero
 
-newtype Instruments =
-  Instruments (Map Text Instrument)
-  deriving Show
-
 instance A.FromJSON Instruments where
     parseJSON val = Instruments <$> A.parseJSON val
 
-data Sound = Sound {
-  pitch       :: Pitch,
-  start       :: TimePoint,
-  stop        :: TimePoint,
-  minDuration :: Duration,
-  maxDuration :: Duration,
-  envelope    :: Envelope,
-  instrument  :: Text
-  } deriving (Eq, Show)
+mkPitchRatio :: Ratio Int -> V.Validation [SoundErrors] PitchRatio
+mkPitchRatio ratio = bool
+  (V.Failure [PitchRatioInvalid ratio'])
+  (V.Success ratio')
+  (ratio < 2)
+  where ratio' = PitchRatio ratio
 
-soundDefault = Sound {
-  pitch       = Pitch (PitchRatio 1) (Octave 0),
-  start       = TimePoint 0,
-  stop        = TimePoint 1,
-  minDuration = Duration 1,
-  maxDuration = Duration 1,
-  envelope    = Sustained,
-  instrument  = "default"
-  }
+mkOctave :: Int -> V.Validation [SoundErrors] Octave
+mkOctave octave =
+  bool
+  (V.Failure [OctaveRangeError octave'])
+  (V.Success octave')
+  (octave >= 0 && octave <= 10)
+  where octave' = Octave octave
 
-data SoundErrors =
-  PitchOutOfRangeError
-  | DurationOutOfRangeError
-  | NoInstrumentError Text
-  deriving Show
+mkPitch :: Ratio Int -> Int -> V.Validation [SoundErrors] Pitch
+mkPitch ratio octave =
+  Pitch <$>
+  mkPitchRatio ratio <*>
+  mkOctave octave
 
-data Chord = Chord {
-  deltaDuration :: Duration,
-  notes         :: [Sound]
-  } deriving Show
+mkVelocity :: Int -> V.Validation [SoundErrors] Velocity
+mkVelocity velocity =
+  bool
+  (V.Failure [VelocityRangeError velocity'])
+  (V.Success velocity')
+  (velocity >= 0 && velocity <= 127)
+  where velocity' = (Velocity velocity)
 
-isValidPitch (Pitch (PitchRatio r) (Octave o)) =
-  let ratioValidation = r >= 1 && r < 2
-      octaveValidation = o >= 0 && o < 10
-  in ratioValidation && octaveValidation
+mkDuration :: Ratio Int -> V.Validation [SoundErrors] Duration
+mkDuration duration =
+  bool
+  (V.Failure [DurationRangeError duration'])
+  (V.Success duration')
+  (duration > 0)
+  where duration' = (Duration duration)
 
-mkSound pitch duration instrument instrumentMap =
-  let pitch'    = bool (V.Failure [PitchOutOfRangeError]) (V.Success pitch) (isValidPitch pitch)
-      duration' = bool (V.Failure [DurationOutOfRangeError]) (V.Success duration) (duration > (Duration 0))
-      instrument' = case (instrumentExists instrument instrumentMap) of
-        Just _ -> V.Success instrument
-        Nothing -> V.Failure [NoInstrumentError instrument]
+mkInstrument ::
+  Instruments -> Text -> V.Validation [SoundErrors] Instrument
+mkInstrument (Instruments m) k =
+  case result of
+    Just v -> V.Success v
+    Nothing -> V.Failure [NoInstrumentError k]
+  where result = Map.lookup k m
+
+mkSound ::
+  Instruments
+  -> Ratio Int
+  -> Int
+  -> Int
+  -> Text
+  -> V.Validation [SoundErrors] Sound
+mkSound instrumentMap pitchRatio octave velocity instrumentName =
+  let pitch' = mkPitch pitchRatio octave
+      velocity' = mkVelocity velocity
+      instrument' = mkInstrument instrumentMap instrumentName
   in Sound <$>
     pitch' <*>
-    pure (TimePoint 1) <*>
+    velocity' <*>
+    pure (TimePoint 0) <*>
     pure (TimePoint 1) <*>
     pure (Duration 1) <*>
-    pure (Duration 2) <*>
-    pure Impulse <*>
+    pure (Duration 1) <*>
+    pure Sustained <*>
     instrument'
 
-instrumentExists k (Instruments m) = Map.lookup k m
+melos :: Instruments -> Int -> [Sound]
+melos instrumentMap n =
+  let pitchRatios = [1 % 1, 5 % 4, 3 % 2, 7 % 4]
+      octaves = [0, 1, 2, 8, 1]
+      velocities = [0, 1, 2, 8, 1]
+      instruments = ["instrument_1"]
+      result = sequenceA $
+        take n $
+        getZipList $
+        (mkSound instrumentMap) <$>
+                ZipList (cycle pitchRatios) <*>
+                ZipList (cycle octaves) <*>
+                ZipList (cycle velocities) <*>
+                ZipList (cycle instruments)
+  in case result of
+    V.Success x -> x
+    V.Failure x -> panic (show (Set.fromList x))
 
+instrumentMapTest :: Instruments
 instrumentMapTest =
   Instruments (Map.fromList [("instrument_1", Instrument { range = (0, 60) })])
 
-melody =
-  let pitchRatios = (cycle [1 % 1, 5 % 4, 3 % 2, 7 % 4])
-      durations = (cycle [1 % 4, 1 % 8, 1 % 16])
-      f ::
-        Ratio Int
-        -> Ratio Int
-        -> V.Validation [SoundErrors] Sound
-      f p d = mkSound
-        (Pitch (PitchRatio p) (Octave 0))
-        (Duration d)
-        "instrument_1"
-        instrumentMapTest
-  in
-    f <$>
-      ZipList pitchRatios <*>
-      ZipList durations
-
-
 main :: IO ()
 main = do
-  instrumentData <- (A.eitherDecode <$> B.readFile "resources/instruments.json") :: IO (Either [Char] Instruments)
+  instrumentData <- (
+    A.eitherDecode <$>
+    B.readFile "resources/instruments.json"
+    ) :: IO (Either [Char] Instruments)
   case instrumentData of
     Left err -> print err
-    Right instrumentMap ->
-      print $
-      mkSound
-      (Pitch (PitchRatio (11 % 8)) (Octave 0))
-      (Duration (1 % 4))
-      "instrument_1"
-      instrumentMap
+    Right result -> mapM_ print $ melos result 10
