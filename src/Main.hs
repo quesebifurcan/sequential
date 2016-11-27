@@ -132,23 +132,21 @@ mkSound instrumentMap pitchRatio octave velocity instrumentName =
     pure Sustained <*>
     instrument'
 
-melos :: Instruments -> Int -> [Sound]
-melos instrumentMap n =
+melos :: Int -> Instruments -> V.Validation [SoundErrors] [Sound]
+melos n instrumentMap =
   let pitchRatios = [1 % 1, 5 % 4, 3 % 2, 7 % 4]
-      octaves = [0, 1, 2, 8, 1]
+      octaves = [1, 1, 2, 8, 1]
       velocities = [0, 1, 2, 8, 1]
       instruments = ["instrument_1"]
-      result = sequenceA $
-        take n $
-        getZipList $
-        (mkSound instrumentMap) <$>
-                ZipList (cycle pitchRatios) <*>
-                ZipList (cycle octaves) <*>
-                ZipList (cycle velocities) <*>
-                ZipList (cycle instruments)
-  in case result of
-    V.Success x -> x
-    V.Failure x -> panic (show (Set.fromList x))
+  in
+    sequenceA $
+    take n $
+    getZipList $
+    (mkSound instrumentMap) <$>
+    ZipList (cycle pitchRatios) <*>
+    ZipList (cycle octaves) <*>
+    ZipList (cycle velocities) <*>
+    ZipList (cycle instruments)
 
 instrumentMapTest :: Instruments
 instrumentMapTest =
@@ -160,6 +158,12 @@ main = do
     A.eitherDecode <$>
     B.readFile "resources/instruments.json"
     ) :: IO (Either [Char] Instruments)
-  case instrumentData of
-    Left err -> print err
-    Right result -> mapM_ print $ melos result 10
+
+  (count:_) <- getArgs
+
+  case (melos <$>
+        (readEither count :: Either [Char] Int) <*>
+        instrumentData) of
+    Left error -> print error
+    Right (V.Failure errors) -> print (Set.fromList errors)
+    Right (V.Success sounds) -> mapM_ print sounds
