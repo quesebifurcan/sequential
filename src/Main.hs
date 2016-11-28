@@ -1,5 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Main where
 
@@ -9,6 +10,7 @@ import qualified Data.Aeson as A
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Map as Map
 import qualified Data.Set as Set
+import qualified Data.List as List
 
 newtype PitchRatio = PitchRatio (Ratio Int) deriving (Eq, Ord, Show)
 
@@ -21,15 +23,15 @@ data Pitch = Pitch {
 
 newtype Velocity = Velocity Int deriving (Eq, Ord, Show)
 
-newtype TimePoint = TimePoint (Ratio Int) deriving (Eq, Ord, Show)
+newtype Duration = Duration (Ratio Int) deriving (Num, Eq, Ord, Show)
 
-newtype Duration = Duration (Ratio Int) deriving (Eq, Ord, Show)
+newtype TimePoint = TimePoint (Ratio Int) deriving (Num, Eq, Ord, Show)
 
-data Envelope = Impulse | Sustained deriving (Eq, Show)
+data Envelope = Impulse | Sustained deriving (Ord, Eq, Show)
 
 data Instrument = Instrument {
   range :: (Int, Int)
-  } deriving (Eq, Show)
+  } deriving (Ord, Eq, Show)
 
 data Sound = Sound {
   pitch       :: Pitch,
@@ -40,7 +42,7 @@ data Sound = Sound {
   maxDuration :: Duration,
   envelope    :: Envelope,
   instrument  :: Instrument
-  } deriving (Eq, Show)
+  } deriving (Ord, Eq, Show)
 
 newtype Instruments = Instruments (Map Text Instrument) deriving Show
 
@@ -132,6 +134,17 @@ mkSound instrumentMap pitchRatio octave velocity instrumentName =
     pure Sustained <*>
     instrument'
 
+soundDefault = Sound {
+  pitch       = Pitch (PitchRatio (1 % 1)) (Octave 0),
+  velocity    = Velocity 127,
+  start       = TimePoint 0,
+  stop        = TimePoint 1,
+  minDuration = Duration 1,
+  maxDuration = Duration 2,
+  envelope    = Sustained,
+  instrument  = Instrument { range = (0, 127) }
+  }
+
 melos :: Int -> Instruments -> V.Validation [SoundErrors] [Sound]
 melos n instrumentMap =
   let pitchRatios = [1 % 1, 5 % 4, 3 % 2, 7 % 4]
@@ -151,6 +164,51 @@ melos n instrumentMap =
 instrumentMapTest :: Instruments
 instrumentMapTest =
   Instruments (Map.fromList [("instrument_1", Instrument { range = (0, 60) })])
+
+minDurationFilled :: TimePoint -> Sound -> Bool
+minDurationFilled now sound =
+  (start' + minDuration') - now' <= 0
+  where (TimePoint start', Duration minDuration') = (start sound, minDuration sound)
+        (TimePoint now') = now
+
+maxDurationExceeded :: TimePoint -> Sound -> Bool
+maxDurationExceeded now sound =
+  now' - start' >= maxDuration'
+  where (TimePoint start', Duration maxDuration') = (start sound, maxDuration sound)
+        (TimePoint now') = now
+
+data ConstraintResolutionStatus a =
+  Resolved a
+  | PartiallyResolved a
+  | Unresolved a
+  deriving (Eq, Show)
+
+eitherResolve' ::
+  Eq t =>
+  (t -> Bool)
+  -> (t -> Either t t) -> t -> t -> ConstraintResolutionStatus t
+eitherResolve' isValid process xs orig =
+  case (isValid xs) of
+    True -> Resolved xs
+    False -> case (process xs) of
+      Left result -> case (result == orig) of
+        True -> Unresolved result
+        False -> PartiallyResolved result
+      Right xs' -> eitherResolve' isValid process xs' orig
+
+eitherResolve ::
+  Eq t =>
+  (t -> Bool)
+  -> (t -> Either t t) -> t -> ConstraintResolutionStatus t
+eitherResolve isValid process xs = eitherResolve' isValid process xs xs
+
+eitherRemoveOne :: (t -> Bool) -> ([t] -> [t]) -> [t] -> Either [t] [t]
+eitherRemoveOne partitionBy sortBy xs =
+  case (List.partition partitionBy xs) of
+    (_, []) -> Right []
+    ([], b) -> Left b
+    (a, b)  -> Right (a' ++ b)
+      where a' = (drop 1 . sortBy) a
 
 main :: IO ()
 main = do
