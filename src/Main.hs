@@ -216,24 +216,20 @@ data ConstraintResolutionStatus a =
   | Unresolved a
   deriving (Eq, Show)
 
-eitherResolve' ::
-  Eq t =>
-  (t -> Bool)
-  -> (t -> Either t t) -> t -> t -> ConstraintResolutionStatus t
-eitherResolve' isValid process xs orig =
-  case (isValid xs) of
-    True -> Resolved xs
-    False -> case (process xs) of
-      Left result -> case (result == orig) of
-        True -> Unresolved result
-        False -> PartiallyResolved result
-      Right xs' -> eitherResolve' isValid process xs' orig
-
 eitherResolve ::
   Eq t =>
   (t -> Bool)
   -> (t -> Either t t) -> t -> ConstraintResolutionStatus t
-eitherResolve isValid process xs = eitherResolve' isValid process xs xs
+eitherResolve isValid process xs =
+  eitherResolve' isValid process xs xs
+  where eitherResolve' isValid process xs orig =
+          case (isValid xs) of
+            True -> Resolved xs
+            False -> case (process xs) of
+              Left result -> case (result == orig) of
+                True -> Unresolved result
+                False -> PartiallyResolved result
+              Right xs' -> eitherResolve' isValid process xs' orig
 
 eitherRemoveOne :: (t -> Bool) -> ([t] -> [t]) -> [t] -> Either [t] [t]
 eitherRemoveOne partitionBy sortBy xs =
@@ -242,6 +238,13 @@ eitherRemoveOne partitionBy sortBy xs =
     ([], b) -> Left b
     (a, b)  -> Right (a' ++ b)
       where a' = (drop 1 . sortBy) a
+
+eitherResolveExample = (expected == result, result)
+  where expected = (PartiallyResolved [5,6,7,8,9])
+        result = eitherResolve
+            (\x -> (length x) < 4)
+            (eitherRemoveOne (\x -> x < 5) (reverse . sort))
+            [1,2,3,4,5,6,7,8,9]
 
 main :: IO ()
 main = do
