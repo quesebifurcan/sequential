@@ -12,7 +12,8 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
 
-newtype PitchRatio = PitchRatio (Ratio Int) deriving (Eq, Ord, Show)
+newtype PitchRatio = PitchRatio (Ratio Int)
+  deriving (Eq, Ord, Num, Show)
 
 newtype Octave = Octave Int deriving (Eq, Ord, Show)
 
@@ -26,6 +27,8 @@ newtype Velocity = Velocity Int deriving (Eq, Ord, Show)
 newtype Duration = Duration (Ratio Int) deriving (Num, Eq, Ord, Show)
 
 newtype TimePoint = TimePoint (Ratio Int) deriving (Num, Eq, Ord, Show)
+
+newtype DissonanceScore = DissonanceScore (Ratio Int) deriving (Num, Eq, Ord, Show)
 
 data Envelope = Impulse | Sustained deriving (Ord, Eq, Show)
 
@@ -176,6 +179,36 @@ maxDurationExceeded now sound =
   now' - start' >= maxDuration'
   where (TimePoint start', Duration maxDuration') = (start sound, maxDuration sound)
         (TimePoint now') = now
+
+distinct :: Ord a => [a] -> [a]
+distinct = (Set.toList . Set.fromList)
+
+getPitchRatios :: [Sound] -> [PitchRatio]
+getPitchRatios = (distinct . map (ratio . pitch))
+
+getDissonanceScore :: [PitchRatio] -> DissonanceScore
+getDissonanceScore pitchRatios =
+  DissonanceScore $
+  (/ (fromIntegral count)) $
+  fromIntegral $
+  sum $
+  map (complexity . getInterval) $
+  intervals
+  where
+    count = length intervals
+    complexity ratio = numerator ratio + denominator ratio
+    getInterval (PitchRatio x, PitchRatio y) = max x y / min x y
+    intervals = pairs (distinct pitchRatios)
+
+pitches = [
+  soundDefault { pitch = (Pitch (PitchRatio (1%1)) (Octave 4)) },
+  soundDefault { pitch = (Pitch (PitchRatio (5%4)) (Octave 4)) },
+  soundDefault { pitch = (Pitch (PitchRatio (3%2)) (Octave 4)) },
+  soundDefault { pitch = (Pitch (PitchRatio (7%4)) (Octave 4)) }
+  ]
+
+pairs :: (Foldable t1, Ord t) => t1 t -> [(t, t)]
+pairs set = [(x,y) | let list = toList set, x <- list, y <- list, x < y]
 
 data ConstraintResolutionStatus a =
   Resolved a
