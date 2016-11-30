@@ -11,6 +11,7 @@ import qualified Data.ByteString.Lazy as B
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
+import qualified Control.Arrow as Arrow
 
 newtype PitchRatio = PitchRatio (Ratio Int)
   deriving (Eq, Ord, Num, Show)
@@ -188,63 +189,111 @@ getPitchRatios = (distinct . map (ratio . pitch))
 
 getDissonanceScore :: [PitchRatio] -> DissonanceScore
 getDissonanceScore pitchRatios =
-  DissonanceScore $
-  (/ (fromIntegral count)) $
-  fromIntegral $
-  sum $
-  map (complexity . getInterval) $
-  intervals
+  case (count == 0) of
+    True -> DissonanceScore (0 % 1)
+    False ->
+      DissonanceScore $
+      (\x -> x % count) $
+      sum $
+      map (complexity . getInterval) $
+      intervals
   where
     count = length intervals
     complexity ratio = numerator ratio + denominator ratio
     getInterval (PitchRatio x, PitchRatio y) = max x y / min x y
-    intervals = pairs (distinct pitchRatios)
-
-pitches = [
-  soundDefault { pitch = (Pitch (PitchRatio (1%1)) (Octave 4)) },
-  soundDefault { pitch = (Pitch (PitchRatio (5%4)) (Octave 4)) },
-  soundDefault { pitch = (Pitch (PitchRatio (3%2)) (Octave 4)) },
-  soundDefault { pitch = (Pitch (PitchRatio (7%4)) (Octave 4)) }
-  ]
+    intervals = distinct (pairs (distinct pitchRatios))
 
 pairs :: (Foldable t1, Ord t) => t1 t -> [(t, t)]
 pairs set = [(x,y) | let list = toList set, x <- list, y <- list, x < y]
 
-data ConstraintResolutionStatus a =
-  Resolved a
-  | PartiallyResolved a
-  | Unresolved a
+data ResolutionErrors a =
+  DissonanceResolutionError a
+  | CountReductionError a
+  | SoundMergeError a
   deriving (Eq, Show)
 
-eitherResolve ::
-  Eq t =>
-  (t -> Bool)
-  -> (t -> Either t t) -> t -> ConstraintResolutionStatus t
-eitherResolve isValid process xs =
-  eitherResolve' isValid process xs xs
-  where eitherResolve' isValid process xs orig =
-          case (isValid xs) of
-            True -> Resolved xs
-            False -> case (process xs) of
-              Left result -> case (result == orig) of
-                True -> Unresolved result
-                False -> PartiallyResolved result
-              Right xs' -> eitherResolve' isValid process xs' orig
+eitherResolve isValid process error xs =
+  case (isValid xs) of
+    True  -> Right xs
+    False ->
+      case (process xs) of
+        Left result  -> Left (error result)
+        Right result -> eitherResolve isValid process error result
 
-eitherRemoveOne :: (t -> Bool) -> ([t] -> [t]) -> [t] -> Either [t] [t]
-eitherRemoveOne partitionBy sortBy xs =
+eitherRemoveOne ::
+  (t -> Bool) -> ([t] -> [t]) -> [t] -> Either [t] [t]
+eitherRemoveOne partitionBy sortBy_ [] = Right []
+eitherRemoveOne partitionBy sortBy_ xs =
   case (List.partition partitionBy xs) of
-    (_, []) -> Right []
     ([], b) -> Left b
     (a, b)  -> Right (a' ++ b)
-      where a' = (drop 1 . sortBy) a
+      where a' = (drop 1 . sortBy_) a
 
-eitherResolveExample = (expected == result, result)
-  where expected = (PartiallyResolved [5,6,7,8,9])
-        result = eitherResolve
-            (\x -> (length x) < 4)
-            (eitherRemoveOne (\x -> x < 5) (reverse . sort))
-            [1,2,3,4,5,6,7,8,9]
+reduceDissonance ::
+  TimePoint
+  -> [PitchRatio]
+  -> [Sound]
+  -> Either (ResolutionErrors [Sound]) [Sound]
+reduceDissonance now limit xs =
+  eitherResolve
+  ((<= limit') . dissonanceScore)
+  (eitherRemoveOne (minDurationFilled now) (reverse . (sortBy (comparing start))))
+  DissonanceResolutionError
+  xs
+  where limit'          = getDissonanceScore limit
+        dissonanceScore = getDissonanceScore . map (ratio . pitch)
+
+reduceCount ::
+  TimePoint
+  -> Int
+  -> [Sound]
+  -> Either (ResolutionErrors [Sound]) [Sound]
+reduceCount now limit xs =
+  eitherResolve
+  ((<= limit) . length)
+  (eitherRemoveOne (minDurationFilled now) (reverse . (sortBy (comparing start))))
+  CountReductionError
+  xs
+
+addSound ::
+  Sound
+  -> [Sound]
+  -> Either (ResolutionErrors [Sound]) [Sound]
+addSound newSound xs =
+  bool (Left (SoundMergeError merged)) (Right merged) canAdd
+  where merged = xs ++ [newSound]
+        params = (start Arrow.&&& pitch Arrow.&&& instrument)
+        canAdd = (length merged) == (Set.size . Set.fromList . (map params)) merged
+
+forwardTime now sounds = undefined
+
+constraintsTest =
+  (reduceDissonance (TimePoint 0) (Protolude.map PitchRatio [1 % 1, 3 % 2]))
+  <=< (reduceCount (TimePoint 10) 5 $)
+  <=< (addSound soundDefault)
+
+pitches = [
+  soundDefault {
+      pitch = (Pitch (PitchRatio (1%1)) (Octave 4)),
+      start = TimePoint 1,
+      minDuration = Duration 1
+      },
+  soundDefault {
+      pitch = (Pitch (PitchRatio (5%4)) (Octave 4)),
+      start = TimePoint 1,
+      minDuration = Duration 1
+      },
+  soundDefault {
+      pitch = (Pitch (PitchRatio (3%2)) (Octave 4)),
+      start = TimePoint 1,
+      minDuration = Duration 1
+      },
+  soundDefault {
+      pitch = (Pitch (PitchRatio (7%4)) (Octave 4)),
+      start = TimePoint 1,
+      minDuration = Duration 1
+      }
+  ]
 
 main :: IO ()
 main = do
