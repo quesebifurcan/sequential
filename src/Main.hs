@@ -12,6 +12,9 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
 import qualified Control.Arrow as Arrow
+import qualified Data.DList as DL
+
+import Control.Monad.State
 
 newtype PitchRatio = PitchRatio (Ratio Int)
   deriving (Eq, Ord, Num, Show)
@@ -269,7 +272,7 @@ forwardTime now sounds = undefined
 
 constraintsTest =
   (reduceDissonance (TimePoint 0) (Protolude.map PitchRatio [1 % 1, 3 % 2]))
-  <=< (reduceCount (TimePoint 10) 5 $)
+  <=< (reduceCount (TimePoint 10) 6)
   <=< (addSound soundDefault)
 
 pitches = [
@@ -294,6 +297,70 @@ pitches = [
       minDuration = Duration 1
       }
   ]
+
+
+-- next s = state $ \_ -> ((), s)
+
+put'' s = state $ \_ -> ((), s)
+
+asdf x = (\(xs, ys) -> (xs, (x:ys)))
+
+-- get / modify
+
+-- list of sounds should be moved from left to
+
+data Sound' = Sound' {
+  _start :: Int
+  , _stop :: Int
+  , _delta :: Int
+  , _minDuration :: Int
+  } deriving (Eq, Show)
+
+defaultSound' = Sound' { _start = 0, _stop = 0, _delta = 1, _minDuration = 2}
+
+sounds = [
+  defaultSound'
+  , defaultSound' { _delta = 1}
+  , defaultSound' { _delta = 1}
+  , defaultSound' { _delta = 1}
+  , defaultSound' { _delta = 1}
+  ]
+
+data Moment = Moment {
+  _now :: Int
+  , _active :: DL.DList Sound'
+  , _result :: DL.DList Sound'
+  } deriving (Eq, Show)
+
+updateSound' (Moment now active result) sound =
+  (Moment (now + (_delta sound)) active (DL.snoc result (sound { _start = now })))
+
+nextMoment :: Sound' -> State Moment ()
+nextMoment sound = do
+  moment <- get
+  put (updateSound' moment sound)
+
+processSounds sounds =
+  runState (mapM nextMoment sounds) (Moment 0 DL.empty DL.empty)
+
+-- maybeMove :: Integer -> State ([Integer], [Integer]) ()
+-- maybeMove x = do
+--   (xs, ys) <- get
+--   if x == 4
+--     -- then put (xs, (x:ys))
+--     then modify (asdf 87)
+--     else put ((x:xs), ys)
+
+  -- put ([], [2,3,4])
+
+    -- then put (xs, ys)
+  --   then put (x:xs)
+  --   else get
+
+-- test :: State TimePoint [TimePoint]
+-- test = do
+--   a <- get
+--   put ([TimePoint 8])
 
 main :: IO ()
 main = do
