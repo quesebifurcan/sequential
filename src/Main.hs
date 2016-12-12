@@ -7,6 +7,7 @@ module Main where
 
 import Protolude
 
+-- TODO: remove abbreviations
 import qualified Data.Either.Validation as V
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Types as AesonTypes
@@ -329,7 +330,6 @@ run' xs =
   fadeOut result
   where result = foldl' resolveMoment momentDefault xs
 
-
 pitches = [
   soundDefault {
       pitch = (Pitch (PitchRatio (1%1)) (Octave 4)),
@@ -402,3 +402,15 @@ main = do
     Left error -> print error
     Right (V.Failure errors) -> print (Set.fromList errors)
     Right (V.Success sounds) -> mapM_ print sounds
+
+-- TODO: multi-segment sounds. Use a `resolve` or `next` field on the
+-- sound itself. If any sound S in attempting to resolve a Moment
+-- breaks a not-yet-unfolded multi-segment, postpone the resolution
+-- of that sound (apply decay until the multi-segment has reached
+-- a stage where it no longer conflicts with S.
+--
+-- Example of Phrase/Chord:
+-- data Sound = Sound { _next :: Maybe Sound } deriving Show
+
+-- TODO: use slopes for melodies?
+-- Scale -> subset -> slope "template" -> ordering
