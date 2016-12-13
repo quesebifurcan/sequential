@@ -180,13 +180,13 @@ soundDefault = Sound {
 data Moment = Moment {
   _now :: TimePoint
   , _active :: Set Sound
-  , _result :: [Sound]
+  , _result :: DL.DList Sound
   } deriving (Ord, Eq, Show)
 
 momentDefault = Moment {
   _now = TimePoint 0
   , _active = Set.empty
-  , _result = []
+  , _result = DL.empty
   }
 
 instrumentMapTest :: Instruments
@@ -244,7 +244,7 @@ eitherRemoveSound' moment@(Moment now active result)
       Just sound -> Right $ Moment
           now
           (Set.delete sound active)
-          (result ++ [sound { stop = now }])
+          (DL.snoc result (sound { stop = now }))
   where removed =
           head
           . (sortBy (comparing start))
@@ -257,7 +257,7 @@ filterMoment pred (Moment now active result) =
   Moment
   now
   (Set.difference active removed)
-  (result ++ fmap setStop (Set.toList removed))
+  (DL.concat [result, (fmap setStop (DL.fromList (Set.toList removed)))])
   where removed   = Set.filter pred active
         setStop x = x { stop = now }
 
@@ -396,12 +396,14 @@ main = do
 
   (count:_) <- getArgs
 
-  case (melos <$>
-        (readEither count :: Either [Char] Int) <*>
-        instrumentData) of
-    Left error -> print error
-    Right (V.Failure errors) -> print (Set.fromList errors)
-    Right (V.Success sounds) -> mapM_ print sounds
+  -- case (melos <$>
+  --       (readEither count :: Either [Char] Int) <*>
+  --       instrumentData) of
+  --   Left error -> print error
+  --   Right (V.Failure errors) -> print (Set.fromList errors)
+  --   Right (V.Success sounds) -> mapM_ print sounds
+
+  mapM_ print $ fmap (\x -> (start x, instrument x, (ratio . pitch) x)) $ _result $ run' (take 400000 (cycle pitches))
 
 -- TODO: multi-segment sounds. Use a `resolve` or `next` field on the
 -- sound itself. If any sound S in attempting to resolve a Moment
