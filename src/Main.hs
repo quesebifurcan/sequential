@@ -17,13 +17,14 @@ import qualified Data.Set as Set
 import qualified Data.List as List
 import qualified Control.Arrow as Arrow
 import qualified Data.DList as DL
-import qualified Data.DList as DL
+import qualified System.IO as IO_
+import qualified Text.PrettyPrint.Leijen.Text as PP
 
 import System.Random
 
 import qualified Test.QuickCheck as QC
 
-newtype PitchRatio = PitchRatio (Ratio Int)
+newtype PitchRatio = PitchRatio (Ratio Integer)
   deriving (Enum, Eq, Ord, Num, Show)
 
 newtype Octave = Octave Int deriving (Eq, Ord, Show)
@@ -46,11 +47,12 @@ isValidPitch (Pitch ratio (Octave octave)) =
 
 newtype Velocity = Velocity Int deriving (Eq, Ord, Show)
 
-newtype Duration = Duration (Ratio Int) deriving (Num, Eq, Ord, Show)
+newtype Duration = Duration (Ratio Integer) deriving (Num, Eq, Ord, Show)
 
-newtype TimePoint = TimePoint (Ratio Int) deriving (Num, Eq, Ord, Show)
+-- newtype TimePoint = TimePoint (Ratio Integer) deriving (Num, Eq, Ord, Show)
+newtype TimePoint = TimePoint { timePoint :: Ratio Integer } deriving (Num, Eq, Ord, Show)
 
-newtype DissonanceScore = DissonanceScore (Ratio Int) deriving (Num, Eq, Ord, Show)
+newtype DissonanceScore = DissonanceScore (Ratio Integer) deriving (Num, Eq, Ord, Show)
 
 data Envelope = Impulse | Sustained deriving (Ord, Eq, Show)
 
@@ -95,7 +97,7 @@ instance A.FromJSON Instrument where
 instance A.FromJSON Instruments where
     parseJSON val = Instruments <$> A.parseJSON val
 
-mkPitchRatio :: Ratio Int -> V.Validation [SoundErrors] PitchRatio
+mkPitchRatio :: Ratio Integer -> V.Validation [SoundErrors] PitchRatio
 mkPitchRatio ratio = bool
   (V.Failure [PitchRatioInvalid ratio'])
   (V.Success ratio')
@@ -110,7 +112,7 @@ mkOctave octave =
   (octave >= 0 && octave <= 10)
   where octave' = Octave octave
 
-mkPitch :: Ratio Int -> Int -> V.Validation [SoundErrors] Pitch
+mkPitch :: Ratio Integer -> Int -> V.Validation [SoundErrors] Pitch
 mkPitch ratio octave =
   Pitch <$>
   mkPitchRatio ratio <*>
@@ -124,7 +126,7 @@ mkVelocity velocity =
   (velocity >= 0 && velocity <= 127)
   where velocity' = (Velocity velocity)
 
-mkDuration :: Ratio Int -> V.Validation [SoundErrors] Duration
+mkDuration :: Ratio Integer -> V.Validation [SoundErrors] Duration
 mkDuration duration =
   bool
   (V.Failure [DurationRangeError duration'])
@@ -142,7 +144,7 @@ mkInstrument (Instruments m) k =
 
 mkSound ::
   Instruments
-  -> Ratio Int
+  -> Ratio Integer
   -> Int
   -> Int
   -> Text
@@ -174,7 +176,7 @@ soundDefault = Sound {
   , constraint    = MomentConstraint { dissonanceLimit = Set.empty
                                      , maxCount = 4 }
   , envelope      = Sustained
-  , instrument    = Instrument { range = (0, 127) }
+  , instrument    = Instrument { range = (48, 60) }
   }
 
 data Moment = Moment {
@@ -189,9 +191,9 @@ momentDefault = Moment {
   , _result = DL.empty
   }
 
-instrumentMapTest :: Instruments
-instrumentMapTest =
-  Instruments (Map.fromList [("instrument_1", Instrument { range = (0, 60) })])
+-- instrumentMapTest :: Instruments
+-- instrumentMapTest =
+--   Instruments (Map.fromList [("instrument_1", Instrument { range = (0, 60) })])
 
 minDurationFilled :: TimePoint -> Sound -> Bool
 minDurationFilled now sound =
@@ -215,7 +217,7 @@ getDissonanceScore :: Set PitchRatio -> DissonanceScore
 getDissonanceScore pitchRatios =
   if count == 0
      then DissonanceScore (0 % 1)
-     else DissonanceScore (sum' % count)
+     else DissonanceScore (sum' % (toInteger count))
   where
     count = length intervals
     complexity ratio = numerator ratio + denominator ratio
@@ -387,6 +389,20 @@ melos n instrumentMap =
     ZipList (cycle velocities) <*>
     ZipList (cycle instruments)
 
+testDListAppend :: MonadIO m => m ()
+testDListAppend =
+  mapM_ print
+  $ fmap (\x -> (start x, instrument x, (ratio . pitch) x))
+  $ _result
+  $ run' (take 400000 (cycle pitches))
+
+-- TODO:
+-- 1. change Instrument type to use (midiNote, baseFreq, pitchRatio, Octave)
+-- 2. render simple melody
+
+-- printSound sound =
+--   show (instrument sound)
+
 main :: IO ()
 main = do
   instrumentData <- (
@@ -394,7 +410,7 @@ main = do
     B.readFile "resources/instruments.json"
     ) :: IO (Either [Char] Instruments)
 
-  (count:_) <- getArgs
+  -- (count:_) <- getArgs
 
   -- case (melos <$>
   --       (readEither count :: Either [Char] Int) <*>
@@ -403,7 +419,29 @@ main = do
   --   Right (V.Failure errors) -> print (Set.fromList errors)
   --   Right (V.Success sounds) -> mapM_ print sounds
 
-  mapM_ print $ fmap (\x -> (start x, instrument x, (ratio . pitch) x)) $ _result $ run' (take 400000 (cycle pitches))
+  -- withFile "test.txt" WriteMode $ (\h -> PP.hPutDoc h (printSounds [soundDefault, soundDefault]))
+
+  -- print $ map _timePoint $ setDeltaDurations $ soundsToMidiEvents $ _result $ run' (take 400 (cycle pitches))
+
+  print instrumentData
+
+
+printSound sound =
+  PP.integer start'
+  PP.<+> PP.integer stop'
+  PP.<+> PP.int velocity'
+  PP.<> PP.semi
+  where start' = ceiling $ ((timePoint . start) sound) * (1000 % 1)
+        stop' = ceiling $ ((timePoint . stop) sound) * (1000 % 1)
+        (Velocity velocity') = (velocity sound)
+
+printSounds = PP.vsep . map printSound
+
+-- TODO: session?
+-- TODO: tempo
+-- TODO: sc score file in the following format (skip start/stop)
+-- [0.1, [\s_new, \helpscore, 1000, 0, 0, \freq, 440]],
+-- [ [ 0.1, [ 's_new', 'helpscore', 1000, 0, 0, 'freq', 440 ] ], [ 0.2, [ 's_new', 'helpscore', 1001, 0, 0, 'freq', 660 ], [ 's_new', 'helpscore', 1002, 0, 0, 'freq', 880 ] ], [ 0.3, [ 's_new', 'helpscore', 1003, 0, 0, 'freq', 220 ] ], [ 1, [ 'c_set', 0, 0 ] ] ]
 
 -- TODO: multi-segment sounds. Use a `resolve` or `next` field on the
 -- sound itself. If any sound S in attempting to resolve a Moment

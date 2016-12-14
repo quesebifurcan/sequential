@@ -2,7 +2,7 @@
   "instrument_1": {
     "range": [48, 60],
     "baseFrequency": 55,
-    "notes": [
+    "midiNoteToPitchRatio": [
       [0, [1, 1]],
       [1, [9, 8]],
       [2, [5, 4]],
