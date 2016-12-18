@@ -425,17 +425,20 @@ main = do
 
   print instrumentData
 
-
 printSound sound =
-  PP.integer start'
-  PP.<+> PP.integer stop'
-  PP.<+> PP.int velocity'
-  PP.<> PP.semi
+  -- PP.brackets $
+  -- PP.integer start'
+  -- PP.<+> PP.brackets (
+  --   PP.integer stop'
+  --   PP.<+> PP.int velocity'
+  -- )
+  PP.encloseSep PP.lbracket PP.rbracket PP.comma [PP.int start', PP.int stop', PP.string "'freq'"]
+  -- PP.<> PP.semi
   where start' = ceiling $ ((timePoint . start) sound) * (1000 % 1)
         stop' = ceiling $ ((timePoint . stop) sound) * (1000 % 1)
         (Velocity velocity') = (velocity sound)
 
-printSounds = PP.vsep . map printSound
+printSounds sounds = PP.list $ fmap printSound sounds
 
 -- TODO: session?
 -- TODO: tempo
