@@ -423,7 +423,10 @@ main = do
 
   -- print $ map _timePoint $ setDeltaDurations $ soundsToMidiEvents $ _result $ run' (take 400 (cycle pitches))
 
-  print instrumentData
+  -- print instrumentData
+  withFile "test.txt" WriteMode $ (\h -> PP.displayIO h (printSounds (DL.toList $ _result $ run' pitches)))
+
+toFloat x = fromRational x :: Float
 
 printSound sound =
   -- PP.brackets $
@@ -432,19 +435,41 @@ printSound sound =
   --   PP.integer stop'
   --   PP.<+> PP.int velocity'
   -- )
-  PP.encloseSep PP.lbracket PP.rbracket PP.comma [PP.int start', PP.int stop', PP.string "'freq'"]
-  -- PP.<> PP.semi
-  where start' = ceiling $ ((timePoint . start) sound) * (1000 % 1)
-        stop' = ceiling $ ((timePoint . stop) sound) * (1000 % 1)
-        (Velocity velocity') = (velocity sound)
 
-printSounds sounds = PP.list $ fmap printSound sounds
+  PP.list [
+    PP.float start'
+    , PP.list expr
+    ]
+
+  -- PP.<> PP.semi
+  -- TODO: node id
+  -- TODO: frequency
+  where start' = fromRational $ ((timePoint . start) sound)
+        stop' = fromRational $ ((timePoint . stop) sound)
+        duration = stop' - start'
+        (Pitch (PitchRatio ratio) (Octave octave)) = pitch sound
+        frequency = toFloat $ (220 % 1 :: Ratio Integer) * 1 * (fromRational ratio)
+        (Velocity velocity') = (velocity sound)
+        expr = [
+          PP.string "'s_new'"
+          , PP.string "'sine'"
+          , PP.int (round frequency)
+          , PP.int 0
+          , PP.int 0
+          , PP.string "'frequency'"
+          , PP.float frequency
+          , PP.string "'duration'"
+          , PP.float 5.8
+          ]
+
+printSounds sounds = PP.renderOneLine $ PP.list $ map printSound sounds
+-- printSounds sounds = undefined
 
 -- TODO: session?
 -- TODO: tempo
 -- TODO: sc score file in the following format (skip start/stop)
 -- [0.1, [\s_new, \helpscore, 1000, 0, 0, \freq, 440]],
--- [ [ 0.1, [ 's_new', 'helpscore', 1000, 0, 0, 'freq', 440 ] ], [ 0.2, [ 's_new', 'helpscore', 1001, 0, 0, 'freq', 660 ], [ 's_new', 'helpscore', 1002, 0, 0, 'freq', 880 ] ], [ 0.3, [ 's_new', 'helpscore', 1003, 0, 0, 'freq', 220 ] ], [ 1, [ 'c_set', 0, 0 ] ] ]
+-- [ [ 0.0, [ 's_new', 'sine', 1000, 0, 0, 'frequency', 400 ] ], [ 0.5, [ 's_new', 'sine', 1001, 0, 0, 'frequency', 200 ] ], [ 0.8, [ 's_new', 'sine', 1002, 0, 0, 'frequency', 300 ] ], [ 1, [ 'c_set', 0, 0 ] ] ]
 
 -- TODO: multi-segment sounds. Use a `resolve` or `next` field on the
 -- sound itself. If any sound S in attempting to resolve a Moment
