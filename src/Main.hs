@@ -27,7 +27,7 @@ import qualified Test.QuickCheck as QC
 newtype PitchRatio = PitchRatio (Ratio Integer)
   deriving (Enum, Eq, Ord, Num, Show)
 
-newtype Octave = Octave Int deriving (Eq, Ord, Show)
+newtype Octave = Octave Integer deriving (Eq, Ord, Show)
 
 data Pitch = Pitch {
   ratio      :: PitchRatio,
@@ -104,7 +104,7 @@ mkPitchRatio ratio = bool
   (ratio >= 1 && ratio < 2)
   where ratio' = PitchRatio ratio
 
-mkOctave :: Int -> V.Validation [SoundErrors] Octave
+mkOctave :: Integer -> V.Validation [SoundErrors] Octave
 mkOctave octave =
   bool
   (V.Failure [OctaveRangeError octave'])
@@ -112,7 +112,7 @@ mkOctave octave =
   (octave >= 0 && octave <= 10)
   where octave' = Octave octave
 
-mkPitch :: Ratio Integer -> Int -> V.Validation [SoundErrors] Pitch
+mkPitch :: Ratio Integer -> Integer -> V.Validation [SoundErrors] Pitch
 mkPitch ratio octave =
   Pitch <$>
   mkPitchRatio ratio <*>
@@ -145,7 +145,7 @@ mkInstrument (Instruments m) k =
 mkSound ::
   Instruments
   -> Ratio Integer
-  -> Int
+  -> Integer
   -> Int
   -> Text
   -> V.Validation [SoundErrors] Sound
@@ -228,8 +228,15 @@ getDissonanceScore pitchRatios =
       intervals
 
 pairs :: (Foldable t1, Ord t) => t1 t -> [(t, t)]
-pairs set = [(x,y) | let list = toList set, x <- list, y <- list, x < y]
+pairs set =
+  [(x,y) | let list = toList set, x <- list, y <- list, x < y]
 
+eitherRemoveOne ::
+  Ord a =>
+  (a -> Bool)
+  -> ([a] -> [a])
+  -> Set a
+  -> Either (Set a) (Set a)
 eitherRemoveOne partitionBy sortBy_ xs
   | Set.size a == 0 = Left b
   | otherwise       = Right (Set.union a' b)
@@ -239,6 +246,7 @@ eitherRemoveOne partitionBy sortBy_ xs
 type DissonanceLimit = Set PitchRatio
 type Sounds = Set Sound
 
+eitherRemoveSound' :: Moment -> Either Moment Moment
 eitherRemoveSound' moment@(Moment now active result)
   | active == Set.empty = Right moment
   | otherwise = case removed of
@@ -255,6 +263,7 @@ eitherRemoveSound' moment@(Moment now active result)
           . Set.partition (minDurationFilled now)
           $ active
 
+filterMoment :: (Sound -> Bool) -> Moment -> Moment
 filterMoment pred (Moment now active result) =
   Moment
   now
@@ -263,9 +272,11 @@ filterMoment pred (Moment now active result) =
   where removed   = Set.filter pred active
         setStop x = x { stop = now }
 
+filterMaxDurationExceeded :: Moment -> Moment
 filterMaxDurationExceeded moment@(Moment now _ _) =
   filterMoment (maxDurationExceeded now) moment
 
+applyDecay' :: Moment -> Moment
 applyDecay' moment@(Moment now active result) =
   case (eitherRemoveSound' moment) of
     Left _       -> applyDecay' (moment { _now = nextTimePoint })
@@ -275,8 +286,10 @@ applyDecay' moment@(Moment now active result) =
             Nothing -> now
             Just x -> x
 
+soundId :: Sound -> (TimePoint, Pitch, Instrument)
 soundId x = (start x, pitch x, instrument x)
 
+addSound' :: Sound -> Moment -> Moment
 addSound' sound moment@(Moment now active result) =
   if canAdd
      then Moment now merged result
@@ -284,21 +297,23 @@ addSound' sound moment@(Moment now active result) =
   where merged = Set.insert (sound { start = now }) active
         canAdd = Set.size merged == ((+ 1) . Set.size . (Set.map soundId)) active
 
+reduceCount' :: Int -> Moment -> Moment
 reduceCount' limit moment@(Moment now active result) =
   bool (reduceCount' limit (applyDecay' moment)) moment test
   where test = (Set.size active <= limit)
 
+reduceDissonance_ :: Set PitchRatio -> Moment -> Moment
 reduceDissonance_ limit moment@(Moment now active result) =
   bool (reduceDissonance_ limit (applyDecay' moment)) moment test
   where limit'          = getDissonanceScore limit
         dissonanceScore = getDissonanceScore . Set.map (ratio . pitch)
-        test = (dissonanceScore active) <= limit'
+        test            = (dissonanceScore active) <= limit'
 
+forwardTime :: Duration -> Moment -> Moment
 forwardTime inc moment@(Moment now _ _) =
   moment { _now = getTimePoint now inc }
 
--- TODO: each sound brings its own set of constraints with it.
-
+buildConstraint :: Sound -> Moment -> Moment
 buildConstraint sound =
   forwardTime (deltaDuration sound)
   . reduceDissonance_ dissonanceLimit'
@@ -311,6 +326,7 @@ resolveMoment :: Moment -> Sound -> Moment
 resolveMoment moment sound = resolveConstraint moment
   where resolveConstraint = buildConstraint sound
 
+fadeOut :: Moment -> Moment
 fadeOut moment@(Moment now active result) =
   bool (fadeOut $ applyDecay' moment) moment (active == Set.empty)
 
@@ -328,6 +344,7 @@ getNextSilence' sound =
 
 getNextSilence = head . sort . Set.toList . (Set.map getNextSilence')
 
+run' :: Foldable t => t Sound -> Moment
 run' xs =
   fadeOut result
   where result = foldl' resolveMoment momentDefault xs
@@ -359,14 +376,13 @@ pitches = [
       }
   ]
 
--- Sequential?
+slope :: (Ord t, Floating t, Enum t) => t -> t -> [t]
 slope exponent count =
   let range' = map (\x -> x ** exponent) [0..count]
       max' = maximum range'
       range'' = map (/ max') range'
   in (List.init . drop 1) range''
 
--- TODO: use relative count
 a = Protolude.map (\x -> (x, 'c')) $ slope 1.9 5
 b = Protolude.map (\x -> (x, 'd')) $ slope 1.7 8
 c = Protolude.map (\x -> (x, 'e')) $ slope 1.5 13
@@ -389,7 +405,6 @@ melos n instrumentMap =
     ZipList (cycle velocities) <*>
     ZipList (cycle instruments)
 
-testDListAppend :: MonadIO m => m ()
 testDListAppend =
   mapM_ print
   $ fmap (\x -> (start x, instrument x, (ratio . pitch) x))
@@ -399,7 +414,6 @@ testDListAppend =
 -- TODO:
 -- 1. change Instrument type to use (midiNote, baseFreq, pitchRatio, Octave)
 -- 2. render simple melody
-
 -- printSound sound =
 --   show (instrument sound)
 
@@ -428,28 +442,16 @@ main = do
 
 toFloat x = fromRational x :: Float
 
-printSound sound nodeId =
-  -- PP.brackets $
-  -- PP.integer start'
-  -- PP.<+> PP.brackets (
-  --   PP.integer stop'
-  --   PP.<+> PP.int velocity'
-  -- )
-
-  PP.list [
-    PP.float start'
-    , PP.list expr
-    ]
-
-  -- PP.<> PP.semi
-  -- TODO: node id
-  -- TODO: base frequency / convert `Pitch` to float
-  where start' = fromRational $ ((timePoint . start) sound)
-        stop' = fromRational $ ((timePoint . stop) sound)
-        duration = stop' - start'
+printSound :: Int -> Sound -> PP.Doc
+printSound nodeId sound =
+  PP.list [PP.float start', PP.list expr]
+  where start'                                     = fromRational $ ((timePoint . start) sound)
+        stop'                                      = fromRational $ ((timePoint . stop) sound)
+        duration                                   = stop' - start'
+        baseFreq                                   = 55 % 1
         (Pitch (PitchRatio ratio) (Octave octave)) = pitch sound
-        frequency = toFloat $ (220 % 1 :: Ratio Integer) * 1 * (fromRational ratio)
-        (Velocity velocity') = (velocity sound)
+        frequency                                  = toFloat $ baseFreq * (octave % 1) * ratio
+        (Velocity velocity')                       = (velocity sound)
         expr = [
           PP.string "'s_new'"
           , PP.string "'sine'"
@@ -462,7 +464,8 @@ printSound sound nodeId =
           , PP.float duration
           ]
 
-printSounds sounds = (PP.renderCompact . PP.list) $ zipWith printSound sounds [1000..]
+printSounds :: [Sound] -> PP.SimpleDoc
+printSounds sounds = PP.renderOneLine . PP.list $ zipWith printSound [1000..] sounds
 
 -- printSounds sounds = undefined
 
