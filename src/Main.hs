@@ -364,13 +364,13 @@ slope exponent count =
   let range' = map (\x -> x ** exponent) [0..count]
       max' = maximum range'
       range'' = map (/ max') range'
-  in List.init range''
+  in (List.init . drop 1) range''
 
 -- TODO: use relative count
 a = Protolude.map (\x -> (x, 'c')) $ slope 1.9 5
 b = Protolude.map (\x -> (x, 'd')) $ slope 1.7 8
 c = Protolude.map (\x -> (x, 'e')) $ slope 1.5 13
-d = Protolude.map (\x -> (x, '.')) $ slope 1.3 144
+d = Protolude.map (\x -> (x, '.')) $ slope 1.3 87
 e = map snd $ sort $ a ++ b ++ c ++ d
 
 melos :: Int -> Instruments -> V.Validation [SoundErrors] [Sound]
@@ -428,7 +428,7 @@ main = do
 
 toFloat x = fromRational x :: Float
 
-printSound sound =
+printSound sound nodeId =
   -- PP.brackets $
   -- PP.integer start'
   -- PP.<+> PP.brackets (
@@ -443,7 +443,7 @@ printSound sound =
 
   -- PP.<> PP.semi
   -- TODO: node id
-  -- TODO: frequency
+  -- TODO: base frequency / convert `Pitch` to float
   where start' = fromRational $ ((timePoint . start) sound)
         stop' = fromRational $ ((timePoint . stop) sound)
         duration = stop' - start'
@@ -453,16 +453,17 @@ printSound sound =
         expr = [
           PP.string "'s_new'"
           , PP.string "'sine'"
-          , PP.int (round frequency)
+          , PP.int nodeId
           , PP.int 0
           , PP.int 0
           , PP.string "'frequency'"
           , PP.float frequency
           , PP.string "'duration'"
-          , PP.float 5.8
+          , PP.float duration
           ]
 
-printSounds sounds = PP.renderOneLine $ PP.list $ map printSound sounds
+printSounds sounds = (PP.renderCompact . PP.list) $ zipWith printSound sounds [1000..]
+
 -- printSounds sounds = undefined
 
 -- TODO: session?
