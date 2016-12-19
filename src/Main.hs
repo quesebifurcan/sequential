@@ -45,7 +45,7 @@ isValidPitchRatio (PitchRatio ratio) =
 isValidPitch (Pitch ratio (Octave octave)) =
   isValidPitchRatio ratio
 
-newtype Velocity = Velocity Int deriving (Eq, Ord, Show)
+newtype Velocity = Velocity (Ratio Integer) deriving (Num, Eq, Ord, Show)
 
 newtype Duration = Duration (Ratio Integer) deriving (Num, Eq, Ord, Show)
 
@@ -118,7 +118,7 @@ mkPitch ratio octave =
   mkPitchRatio ratio <*>
   mkOctave octave
 
-mkVelocity :: Int -> V.Validation [SoundErrors] Velocity
+mkVelocity :: Ratio Integer -> V.Validation [SoundErrors] Velocity
 mkVelocity velocity =
   bool
   (V.Failure [VelocityRangeError velocity'])
@@ -146,7 +146,7 @@ mkSound ::
   Instruments
   -> Ratio Integer
   -> Integer
-  -> Int
+  -> Ratio Integer
   -> Text
   -> V.Validation [SoundErrors] Sound
 mkSound instrumentMap pitchRatio octave velocity instrumentName =
@@ -405,6 +405,7 @@ melos n instrumentMap =
     ZipList (cycle velocities) <*>
     ZipList (cycle instruments)
 
+testDListAppend :: MonadIO m => m ()
 testDListAppend =
   mapM_ print
   $ fmap (\x -> (start x, instrument x, (ratio . pitch) x))
@@ -414,6 +415,7 @@ testDListAppend =
 -- TODO:
 -- 1. change Instrument type to use (midiNote, baseFreq, pitchRatio, Octave)
 -- 2. render simple melody
+
 -- printSound sound =
 --   show (instrument sound)
 
@@ -438,6 +440,7 @@ main = do
   -- print $ map _timePoint $ setDeltaDurations $ soundsToMidiEvents $ _result $ run' (take 400 (cycle pitches))
 
   -- print instrumentData
+
   withFile "test.txt" WriteMode $ (\h -> PP.displayIO h (printSounds (DL.toList $ _result $ run' pitches)))
 
 toFloat x = fromRational x :: Float
