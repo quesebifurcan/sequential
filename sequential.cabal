@@ -11,8 +11,24 @@ category:            Music
 build-type:          Simple
 cabal-version:       >=1.10
 
-executable sequential
+library
   hs-source-dirs:      src
+  default-language:    Haskell2010
+  exposed-modules:     Sequential
+  build-depends:       base >= 4.7 && < 5,
+                       protolude >= 0.1,
+                       either >= 4,
+                       aeson >= 0.11,
+                       bytestring >= 0.10,
+                       containers >= 0.5,
+                       QuickCheck >= 2.8,
+                       mtl >= 2.2,
+                       dlist >= 0.8,
+                       random >= 1.1,
+                       wl-pprint-text
+
+executable sequential-example
+  hs-source-dirs:      Example
   main-is:             Main.hs
   default-language:    Haskell2010
   build-depends:       base >= 4.7 && < 5,
@@ -25,5 +41,5 @@ executable sequential
                        mtl >= 2.2,
                        dlist >= 0.8,
                        random >= 1.1,
-                       wl-pprint-text
-                       
+                       wl-pprint-text,
+                       sequential >= 0.1
