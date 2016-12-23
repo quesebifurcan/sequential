@@ -90,42 +90,6 @@ soundDefault = Sound {
   , instrument    = Instrument { range = (48, 60) }
   }
 
-slope :: (Ord t, Floating t, Enum t) => t -> t -> [t]
-slope exponent count =
-  let range' = map (\x -> x ** exponent) [0..count]
-      max' = maximum range'
-      range'' = map (/ max') range'
-  in (List.init . drop 1) range''
-
-a = Protolude.map (\x -> (x, 'c')) $ slope 1.9 5
-b = Protolude.map (\x -> (x, 'd')) $ slope 1.7 8
-c = Protolude.map (\x -> (x, 'e')) $ slope 1.5 13
-d = Protolude.map (\x -> (x, '.')) $ slope 1.3 87
-e = map snd $ sort $ a ++ b ++ c ++ d
-
-melos :: Int -> Instruments -> V.Validation [SoundErrors] [Sound]
-melos n instrumentMap =
-  let pitchRatios = [1 % 1, 5 % 4, 3 % 2, 7 % 4]
-      octaves = [1, 1, 2, 8, 1]
-      velocities = [0, 1, 2, 8, 1]
-      instruments = ["instrument_1"]
-  in
-    sequenceA $
-    take n $
-    getZipList $
-    (mkSound instrumentMap) <$>
-    ZipList (cycle pitchRatios) <*>
-    ZipList (cycle octaves) <*>
-    ZipList (cycle velocities) <*>
-    ZipList (cycle instruments)
-
-testDListAppend :: MonadIO m => m ()
-testDListAppend =
-  mapM_ print
-  $ fmap (\x -> (start x, instrument x, (ratio . pitch) x))
-  $ _result
-  $ run' (take 400000 (cycle pitches))
-
 main :: IO ()
 main = do
   instrumentData <- (

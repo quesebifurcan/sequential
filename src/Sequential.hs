@@ -7,54 +7,49 @@ module Sequential where
 
 import Protolude
 
--- TODO: remove abbreviations
-import qualified Data.Either.Validation as V
-import qualified Data.Aeson as A
+import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Types as AesonTypes
-import qualified Data.ByteString.Lazy as B
-import qualified Data.Map as Map
-import qualified Data.Set as Set
-import qualified Data.List as List
-import qualified Control.Arrow as Arrow
+import qualified Data.Set as Set (
+  delete
+  , difference
+  , empty
+  , filter
+  , fromList
+  , insert
+  , map
+  , partition
+  , size
+  , toList
+  , union
+  )
 import qualified Data.DList as DL
-import qualified System.IO as IO_
-import qualified Text.PrettyPrint.Leijen.Text as PP
-
-import System.Random
-
-import qualified Test.QuickCheck as QC
 
 newtype PitchRatio = PitchRatio (Ratio Integer)
   deriving (Enum, Eq, Ord, Num, Show)
 
-newtype Octave = Octave Integer deriving (Eq, Ord, Show)
+newtype Octave = Octave Integer
+  deriving (Eq, Ord, Show)
 
 data Pitch = Pitch {
   ratio      :: PitchRatio,
   octave     :: Octave
   } deriving (Eq, Ord, Show)
 
-octaveEquivalentRatio r
-  | r < 1     = octaveEquivalentRatio (r * 2)
-  | r >= 2    = octaveEquivalentRatio (r / 2)
-  | otherwise = r
+newtype Velocity = Velocity (Ratio Integer)
+  deriving (Num, Eq, Ord, Show)
 
-isValidPitchRatio (PitchRatio ratio) =
-  numerator ratio >= 0 && denominator ratio >= 1
+newtype Duration = Duration (Ratio Integer)
+  deriving (Num, Eq, Ord, Show)
 
-isValidPitch (Pitch ratio (Octave octave)) =
-  isValidPitchRatio ratio
+newtype TimePoint = TimePoint {
+  timePoint :: Ratio Integer
+  } deriving (Num, Eq, Ord, Show)
 
-newtype Velocity = Velocity (Ratio Integer) deriving (Num, Eq, Ord, Show)
+newtype DissonanceScore = DissonanceScore (Ratio Integer)
+  deriving (Num, Eq, Ord, Show)
 
-newtype Duration = Duration (Ratio Integer) deriving (Num, Eq, Ord, Show)
-
--- newtype TimePoint = TimePoint (Ratio Integer) deriving (Num, Eq, Ord, Show)
-newtype TimePoint = TimePoint { timePoint :: Ratio Integer } deriving (Num, Eq, Ord, Show)
-
-newtype DissonanceScore = DissonanceScore (Ratio Integer) deriving (Num, Eq, Ord, Show)
-
-data Envelope = Impulse | Sustained deriving (Ord, Eq, Show)
+data Envelope = Impulse | Sustained
+  deriving (Ord, Eq, Show)
 
 data Instrument = Instrument {
   range :: (Int, Int)
@@ -80,90 +75,14 @@ data MomentConstraint = MomentConstraint {
 
 newtype Instruments = Instruments (Map Text Instrument) deriving Show
 
-data SoundErrors =
-  PitchRatioInvalid PitchRatio
-  | VelocityRangeError Velocity
-  | OctaveRangeError Octave
-  | DurationRangeError Duration
-  | NoInstrumentError Text
-  deriving (Ord, Eq, Show)
-
-instance A.FromJSON Instrument where
-   parseJSON (A.Object v) =
+instance Aeson.FromJSON Instrument where
+   parseJSON (Aeson.Object v) =
      Instrument <$>
-     v A..: "range"
+     v Aeson..: "range"
    parseJSON invalid = AesonTypes.typeMismatch "Instrument" invalid
 
-instance A.FromJSON Instruments where
-    parseJSON val = Instruments <$> A.parseJSON val
-
-mkPitchRatio :: Ratio Integer -> V.Validation [SoundErrors] PitchRatio
-mkPitchRatio ratio = bool
-  (V.Failure [PitchRatioInvalid ratio'])
-  (V.Success ratio')
-  (ratio >= 1 && ratio < 2)
-  where ratio' = PitchRatio ratio
-
-mkOctave :: Integer -> V.Validation [SoundErrors] Octave
-mkOctave octave =
-  bool
-  (V.Failure [OctaveRangeError octave'])
-  (V.Success octave')
-  (octave >= 0 && octave <= 10)
-  where octave' = Octave octave
-
-mkPitch :: Ratio Integer -> Integer -> V.Validation [SoundErrors] Pitch
-mkPitch ratio octave =
-  Pitch <$>
-  mkPitchRatio ratio <*>
-  mkOctave octave
-
-mkVelocity :: Ratio Integer -> V.Validation [SoundErrors] Velocity
-mkVelocity velocity =
-  bool
-  (V.Failure [VelocityRangeError velocity'])
-  (V.Success velocity')
-  (velocity >= 0 && velocity <= 127)
-  where velocity' = (Velocity velocity)
-
-mkDuration :: Ratio Integer -> V.Validation [SoundErrors] Duration
-mkDuration duration =
-  bool
-  (V.Failure [DurationRangeError duration'])
-  (V.Success duration')
-  (duration > 0)
-  where duration' = (Duration duration)
-
-mkInstrument ::
-  Instruments -> Text -> V.Validation [SoundErrors] Instrument
-mkInstrument (Instruments m) k =
-  case result of
-    Just v -> V.Success v
-    Nothing -> V.Failure [NoInstrumentError k]
-  where result = Map.lookup k m
-
-mkSound ::
-  Instruments
-  -> Ratio Integer
-  -> Integer
-  -> Ratio Integer
-  -> Text
-  -> V.Validation [SoundErrors] Sound
-mkSound instrumentMap pitchRatio octave velocity instrumentName =
-  let pitch' = mkPitch pitchRatio octave
-      velocity' = mkVelocity velocity
-      instrument' = mkInstrument instrumentMap instrumentName
-  in Sound <$>
-    pitch' <*>
-    velocity' <*>
-    pure (TimePoint 0) <*>
-    pure (TimePoint 1) <*>
-    pure (Duration 1) <*>
-    pure (Duration 1) <*>
-    pure (Duration 1) <*>
-    pure Sustained <*>
-    pure MomentConstraint { dissonanceLimit = Set.empty, maxCount = 4 } <*>
-    instrument'
+instance Aeson.FromJSON Instruments where
+    parseJSON val = Instruments <$> Aeson.parseJSON val
 
 data Moment = Moment {
   _now :: TimePoint
@@ -171,6 +90,7 @@ data Moment = Moment {
   , _result :: DL.DList Sound
   } deriving (Ord, Eq, Show)
 
+momentDefault :: Moment
 momentDefault = Moment {
   _now = TimePoint 0
   , _active = Set.empty
@@ -215,7 +135,7 @@ getDissonanceScore pitchRatios =
 
 pairs :: (Foldable t1, Ord t) => t1 t -> [(t, t)]
 pairs set =
-  [(x,y) | let list = toList set, x <- list, y <- list, x < y]
+  [(x,y) | let xs = toList set, x <- xs, y <- xs, x < y]
 
 eitherRemoveOne ::
   Ord a =>
@@ -263,10 +183,10 @@ filterMaxDurationExceeded moment@(Moment now _ _) =
   filterMoment (maxDurationExceeded now) moment
 
 applyDecay' :: Moment -> Moment
-applyDecay' moment@(Moment now active result) =
+applyDecay' moment@(Moment now active _) =
   case (eitherRemoveSound' moment) of
-    Left _       -> applyDecay' (moment { _now = nextTimePoint })
-    Right result -> result
+    Left _  -> applyDecay' (moment { _now = nextTimePoint })
+    Right x -> x
   where nextTimePoint =
           case (getNextSilence active) of
             Nothing -> now
@@ -284,12 +204,12 @@ addSound' sound moment@(Moment now active result) =
         canAdd = Set.size merged == ((+ 1) . Set.size . (Set.map soundId)) active
 
 reduceCount' :: Int -> Moment -> Moment
-reduceCount' limit moment@(Moment now active result) =
+reduceCount' limit moment@(Moment _ active _) =
   bool (reduceCount' limit (applyDecay' moment)) moment test
   where test = (Set.size active <= limit)
 
 reduceDissonance_ :: Set PitchRatio -> Moment -> Moment
-reduceDissonance_ limit moment@(Moment now active result) =
+reduceDissonance_ limit moment@(Moment _ active _) =
   bool (reduceDissonance_ limit (applyDecay' moment)) moment test
   where limit'          = getDissonanceScore limit
         dissonanceScore = getDissonanceScore . Set.map (ratio . pitch)
@@ -313,15 +233,17 @@ resolveMoment moment sound = resolveConstraint moment
   where resolveConstraint = buildConstraint sound
 
 fadeOut :: Moment -> Moment
-fadeOut moment@(Moment now active result) =
+fadeOut moment@(Moment _ active _) =
   bool (fadeOut $ applyDecay' moment) moment (active == Set.empty)
 
+-- TODO: rename
 getTimePoint :: TimePoint -> Duration -> TimePoint
 getTimePoint now duration =
   let (TimePoint now')     = now
       (Duration duration') = duration
   in TimePoint (now' + duration')
 
+-- TODO: rename
 getNextSilence' :: Sound -> TimePoint
 getNextSilence' sound =
   let (TimePoint start')      = start sound
@@ -330,6 +252,7 @@ getNextSilence' sound =
 
 getNextSilence = head . sort . Set.toList . (Set.map getNextSilence')
 
+-- TODO: rename
 run' :: Foldable t => t Sound -> Moment
 run' xs =
   fadeOut result

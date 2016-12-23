@@ -20,34 +20,128 @@ import qualified Text.PrettyPrint.Leijen.Text as PP
 
 import Sequential
 
-toFloat x = fromRational x :: Float
+--
+-- Smart Constructors
+--
+octaveEquivalentRatio r
+  | r < 1     = octaveEquivalentRatio (r * 2)
+  | r >= 2    = octaveEquivalentRatio (r / 2)
+  | otherwise = r
 
-printQuoted = PP.enclose PP.squote PP.squote . PP.string
+isValidPitchRatio (PitchRatio ratio) =
+  numerator ratio >= 0 && denominator ratio >= 1
 
-printSound :: Int -> Sound -> PP.Doc
-printSound nodeId sound =
-  PP.list [PP.float start', PP.list expr]
-  where start'                                     = fromRational $ ((timePoint . start) sound)
-        stop'                                      = fromRational $ ((timePoint . stop) sound)
-        duration                                   = stop' - start'
-        baseFreq                                   = 55 % 1
-        (Pitch (PitchRatio ratio) (Octave octave)) = pitch sound
-        frequency                                  = toFloat $ baseFreq * (octave % 1) * ratio
-        (Velocity velocity')                       = (velocity sound)
-        expr = [
-          printQuoted "s_new"
-          , printQuoted "sine"
-          , PP.int nodeId
-          , PP.int 0
-          , PP.int 0
-          , printQuoted "frequency"
-          , PP.float frequency
-          , printQuoted "duration"
-          , PP.float duration
-          ]
+isValidPitch (Pitch ratio (Octave octave)) =
+  isValidPitchRatio ratio
 
-printSounds :: [Sound] -> PP.SimpleDoc
-printSounds sounds = PP.renderOneLine . PP.list $ zipWith printSound [1000..] sounds
+data SoundErrors =
+  PitchRatioInvalid PitchRatio
+  | VelocityRangeError Velocity
+  | OctaveRangeError Octave
+  | DurationRangeError Duration
+  | NoInstrumentError Text
+  deriving (Ord, Eq, Show)
+
+mkPitchRatio :: Ratio Integer -> V.Validation [SoundErrors] PitchRatio
+mkPitchRatio ratio = bool
+  (V.Failure [PitchRatioInvalid ratio'])
+  (V.Success ratio')
+  (ratio >= 1 && ratio < 2)
+  where ratio' = PitchRatio ratio
+
+mkOctave :: Integer -> V.Validation [SoundErrors] Octave
+mkOctave octave =
+  bool
+  (V.Failure [OctaveRangeError octave'])
+  (V.Success octave')
+  (octave >= 0 && octave <= 10)
+  where octave' = Octave octave
+
+mkPitch :: Ratio Integer -> Integer -> V.Validation [SoundErrors] Pitch
+mkPitch ratio octave =
+  Pitch <$>
+  mkPitchRatio ratio <*>
+  mkOctave octave
+
+mkVelocity :: Ratio Integer -> V.Validation [SoundErrors] Velocity
+mkVelocity velocity =
+  bool
+  (V.Failure [VelocityRangeError velocity'])
+  (V.Success velocity')
+  (velocity >= 0 && velocity <= 127)
+  where velocity' = (Velocity velocity)
+
+mkDuration :: Ratio Integer -> V.Validation [SoundErrors] Duration
+mkDuration duration =
+  bool
+  (V.Failure [DurationRangeError duration'])
+  (V.Success duration')
+  (duration > 0)
+  where duration' = (Duration duration)
+
+mkInstrument ::
+  Instruments -> Text -> V.Validation [SoundErrors] Instrument
+mkInstrument (Instruments m) k =
+  case result of
+    Just v -> V.Success v
+    Nothing -> V.Failure [NoInstrumentError k]
+  where result = Map.lookup k m
+
+mkSound ::
+  Instruments
+  -> Ratio Integer
+  -> Integer
+  -> Ratio Integer
+  -> Text
+  -> V.Validation [SoundErrors] Sound
+mkSound instrumentMap pitchRatio octave velocity instrumentName =
+  let pitch' = mkPitch pitchRatio octave
+      velocity' = mkVelocity velocity
+      instrument' = mkInstrument instrumentMap instrumentName
+  in Sound <$>
+    pitch' <*>
+    velocity' <*>
+    pure (TimePoint 0) <*>
+    pure (TimePoint 1) <*>
+    pure (Duration 1) <*>
+    pure (Duration 1) <*>
+    pure (Duration 1) <*>
+    pure Sustained <*>
+    pure MomentConstraint { dissonanceLimit = Set.empty, maxCount = 4 } <*>
+    instrument'
+
+--
+-- Materials
+--
+
+slope :: (Ord t, Floating t, Enum t) => t -> t -> [t]
+slope exponent count =
+  let range' = map (\x -> x ** exponent) [0..count]
+      max' = maximum range'
+      range'' = map (/ max') range'
+  in (List.init . drop 1) range''
+
+-- a = Protolude.map (\x -> (x, 'c')) $ slope 1.9 5
+-- b = Protolude.map (\x -> (x, 'd')) $ slope 1.7 8
+-- c = Protolude.map (\x -> (x, 'e')) $ slope 1.5 13
+-- d = Protolude.map (\x -> (x, '.')) $ slope 1.3 87
+-- e = map snd $ sort $ a ++ b ++ c ++ d
+
+melos :: Int -> Instruments -> V.Validation [SoundErrors] [Sound]
+melos n instrumentMap =
+  let pitchRatios = [1 % 1, 5 % 4, 3 % 2, 7 % 4]
+      octaves = [1, 1, 2, 8, 1]
+      velocities = [0, 1, 2, 8, 1]
+      instruments = ["instrument_1"]
+  in
+    sequenceA $
+    take n $
+    getZipList $
+    (mkSound instrumentMap) <$>
+    ZipList (cycle pitchRatios) <*>
+    ZipList (cycle octaves) <*>
+    ZipList (cycle velocities) <*>
+    ZipList (cycle instruments)
 
 pitches = [
   soundDefault {
@@ -90,42 +184,6 @@ soundDefault = Sound {
   , instrument    = Instrument { range = (48, 60) }
   }
 
-slope :: (Ord t, Floating t, Enum t) => t -> t -> [t]
-slope exponent count =
-  let range' = map (\x -> x ** exponent) [0..count]
-      max' = maximum range'
-      range'' = map (/ max') range'
-  in (List.init . drop 1) range''
-
-a = Protolude.map (\x -> (x, 'c')) $ slope 1.9 5
-b = Protolude.map (\x -> (x, 'd')) $ slope 1.7 8
-c = Protolude.map (\x -> (x, 'e')) $ slope 1.5 13
-d = Protolude.map (\x -> (x, '.')) $ slope 1.3 87
-e = map snd $ sort $ a ++ b ++ c ++ d
-
-melos :: Int -> Instruments -> V.Validation [SoundErrors] [Sound]
-melos n instrumentMap =
-  let pitchRatios = [1 % 1, 5 % 4, 3 % 2, 7 % 4]
-      octaves = [1, 1, 2, 8, 1]
-      velocities = [0, 1, 2, 8, 1]
-      instruments = ["instrument_1"]
-  in
-    sequenceA $
-    take n $
-    getZipList $
-    (mkSound instrumentMap) <$>
-    ZipList (cycle pitchRatios) <*>
-    ZipList (cycle octaves) <*>
-    ZipList (cycle velocities) <*>
-    ZipList (cycle instruments)
-
-testDListAppend :: MonadIO m => m ()
-testDListAppend =
-  mapM_ print
-  $ fmap (\x -> (start x, instrument x, (ratio . pitch) x))
-  $ _result
-  $ run' (take 400000 (cycle pitches))
-
 main :: IO ()
 main = do
   instrumentData <- (
@@ -133,19 +191,4 @@ main = do
     B.readFile "resources/instruments.json"
     ) :: IO (Either [Char] Instruments)
 
-  -- (count:_) <- getArgs
-
-  -- case (melos <$>
-  --       (readEither count :: Either [Char] Int) <*>
-  --       instrumentData) of
-  --   Left error -> print error
-  --   Right (V.Failure errors) -> print (Set.fromList errors)
-  --   Right (V.Success sounds) -> mapM_ print sounds
-
-  -- withFile "test.txt" WriteMode $ (\h -> PP.hPutDoc h (printSounds [soundDefault, soundDefault]))
-
-  -- print $ map _timePoint $ setDeltaDurations $ soundsToMidiEvents $ _result $ run' (take 400 (cycle pitches))
-
-  -- print instrumentData
-
-  withFile "testing-example.txt" WriteMode $ (\h -> PP.displayIO h (printSounds (DL.toList $ _result $ run' pitches)))
+  print soundDefault
