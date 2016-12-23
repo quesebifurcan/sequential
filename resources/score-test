@@ -1,0 +1,1 @@
+[ [ 0.0, [ 's_new', 'sine', 1000, 0, 0, 'frequency', 400 ] ], [ 0.5, [ 's_new', 'sine', 1001, 0, 0, 'frequency', 200 ] ], [ 0.8, [ 's_new', 'sine', 1002, 0, 0, 'frequency', 300 ] ], [ 1, [ 'c_set', 0, 0 ] ] ]

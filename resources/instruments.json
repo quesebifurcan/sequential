@@ -1,8 +1,9 @@
 {
   "instrument_1": {
-    "range": [48, 60]
-  },
-  "instrument_2": {
-    "range": [48, 60]
+    "range": [48, 60],
+    "baseFrequency": 55,
+    "midiNoteToPitchRatio": [
+      [0, [1, 1], 1]
+    ]
   }
 }
