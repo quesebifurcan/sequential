@@ -221,6 +221,9 @@ buildConstraint sound =
   . reduceDissonance_ dissonanceLimit'
   . reduceCount' maxCount'
   . addSound' sound
+  -- TODO: prior to `addSound'`, remove sounds,
+  -- the maxDuration of which would be exceeded by the delta
+  -- of the new sound.
   where dissonanceLimit' = (dissonanceLimit . constraint) sound
         maxCount'        = (maxCount . constraint) sound
 
