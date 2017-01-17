@@ -12,6 +12,8 @@ import Sequential4
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 
+import qualified Text.Show.Pretty as PP
+
 import Test.QuickCheck
 
 -- generate (arbitrary :: Gen PitchRatio)
@@ -75,20 +77,13 @@ instance Arbitrary Sound
             , sound__instrument    = Instrument instrument
             }
 
--- instance Arbitrary Sound
---   where arbitrary = do
---           pitch <- arbitrary :: Gen Pitch
---           velocity <-
---           return $ Pitch (PitchRatio pitchRatio) (Octave octave)
---   where arbitrary = elements [Open6, Close6]
-
--- prop_getGroups3 :: Map Int Sound6 -> Property
-
 -- prop_getGroups3 :: PitchRatio -> Property
 -- prop_getGroups3 pitchRatio =
 --   pitchRatio === PitchRatio (3 % 4)
 --   -- (sum (fmap (length . Map.elems) $ getGroups sounds)) ===
 --   -- (length (Map.elems sounds))
+
+printSampleSounds = fmap PP.ppDoc (sample' (arbitrary :: Gen Sound))
 
 return []
 runTests = $quickCheckAll

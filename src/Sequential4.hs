@@ -1,5 +1,4 @@
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -74,3 +73,4 @@ data Moment = Moment {
   , moment__active :: Set Sound
   , moment__result :: [Sound]
   } deriving (Ord, Eq, Show)
+

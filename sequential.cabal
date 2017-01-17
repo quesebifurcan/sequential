@@ -28,6 +28,7 @@ library
                        wl-pprint-text,
                        monad-loops,
                        transformers >= 0.5,
+                       pretty-show,
                        HUnit
 
 test-suite sequential-test
