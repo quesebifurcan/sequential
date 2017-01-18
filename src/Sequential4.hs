@@ -74,3 +74,36 @@ data Moment = Moment {
   , moment__result :: [Sound]
   } deriving (Ord, Eq, Show)
 
+harmonicDistance = undefined
+
+dissonanceScore = undefined
+
+isDissonant = undefined
+
+insertSound = undefined
+
+anyRemovable = undefined
+
+anyResolved = undefined
+
+allResolved = undefined
+
+isPending = undefined
+
+maxDurationExceeded = undefined
+
+minDurationFilled = undefined
+
+applyDecay = undefined
+
+forwardTime = undefined
+
+reduceDissonance = undefined
+
+reduceCount = undefined
+
+getNextMinDuration = undefined
+
+isMember = undefined
+
+getGroups = undefined

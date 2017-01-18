@@ -57,6 +57,7 @@ instance Arbitrary Sound
           pitch            <- arbitrary :: Gen Pitch
           velocity         <- genLimitedRatio
           start            <- genPosRatio
+          -- TODO: `stop` should be greater than `start` + `minDuration`
           stop             <- genPosRatio
           minDuration      <- genPosRatio
           maxDuration      <- genPosRatio
