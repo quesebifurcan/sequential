@@ -74,9 +74,42 @@ data Moment = Moment {
   , moment__result :: [Sound]
   } deriving (Ord, Eq, Show)
 
-harmonicDistance = undefined
+limitRatio :: (Ord a, Fractional a) => a -> a
+limitRatio n
+  | n < 1     = limitRatio (n * 2)
+  | n >= 2    = limitRatio (n / 2)
+  | otherwise = n
 
-dissonanceScore = undefined
+harmonicDistance :: Floating a => Ratio Integer -> a
+harmonicDistance r =
+  logBase 2 . fromIntegral $ n * d
+  where r' = limitRatio r
+        n  = numerator r'
+        d  = denominator r'
+
+distinct :: Ord a => [a] -> [a]
+distinct = (Set.toList . Set.fromList)
+
+pairs :: (Foldable t1, Ord t) => t1 t -> [(t, t)]
+pairs set =
+  [(x,y) | let xs = toList set, x <- xs, y <- xs, x < y]
+
+limitedInterval (PitchRatio x, PitchRatio y) =
+  max limX limY / min limX limY
+  where limX = limitRatio x
+        limY = limitRatio y
+
+dissonanceScore ::
+  (Foldable t1, Floating t) => t1 PitchRatio -> t
+dissonanceScore pitchRatios =
+  if count == 0
+    then 0
+    else sum' / (fromIntegral count)
+  where
+    count     = length intervals
+    intervals = distinct (pairs pitchRatios)
+    sum'      = sum $
+      fmap (harmonicDistance . limitedInterval) intervals
 
 isDissonant = undefined
 
