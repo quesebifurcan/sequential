@@ -189,13 +189,15 @@ gestureB = do
 
 -- Use ranges for the different params (Pitch etc.)
 -- When exceeding a range, switch to next group (or do something else)
-gestureC :: State (Int, [Int]) ()
+gestureC :: (State (Int, [Int])) ()
 gestureC = do
   up (20, 30) 3
-  up (20, 30) 3
-  up (20, 30) 3
+  (_, result) <- get
+  if length result >= 10
+     then return ()
+     else gestureC
   where
-    up :: (Int, Int) -> Int -> State (Int, [Int]) ()
+    up :: (Int, Int) -> Int -> (State (Int, [Int])) ()
     up (lo, hi) n = do
       replicateM_ n (modify f)
       modify (\(curr, result) -> (curr, result ++ [curr]))

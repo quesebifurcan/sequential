@@ -20,11 +20,6 @@ import Test.QuickCheck
 -- sample genLimitedRatio
 -- generate (arbitrary :: Gen Sound)
 
-limitRatio n
-  | n < 1     = limitRatio (n * 2)
-  | n >= 2    = limitRatio (n / 2)
-  | otherwise = n
-
 genPosRatio :: Gen (Ratio Integer)
 genPosRatio = do
   n <- choose (1, 100)
@@ -52,6 +47,10 @@ instance Arbitrary Pitch
           octave     <- choose (1, 10)
           return $ Pitch (PitchRatio pitchRatio) (Octave octave)
 
+-- instance Arbitrary MergeStrategy
+--   where arbitrary = do
+--           return $ MergeStrategy (\sound moment -> Set.insert sound moment)
+
 instance Arbitrary Sound
   where arbitrary = do
           pitch            <- arbitrary :: Gen Pitch
@@ -63,27 +62,44 @@ instance Arbitrary Sound
           maxDuration      <- genPosRatio
           deltaDuration    <- genPosRatio
           envelope         <- elements [Impulse, Sustained]
-          momentConstraint <- arbitrary :: Gen MomentConstraint
+          constraint       <- arbitrary :: Gen MomentConstraint
           instrument       <- elements ["a", "b", "c", "d"]
+          -- Create generator for phrases as well, using Pending/Resolved
+          resolutionStatus <- elements [Resolved]
+          verticalGroup    <- arbitrary :: Gen Int
+          horizontalGroup  <- arbitrary :: Gen Int
           return $ Sound {
-            sound__pitch           = pitch
-            , sound__velocity      = Velocity velocity
-            , sound__start         = TimePoint start
-            , sound__stop          = TimePoint stop
-            , sound__minDuration   = Duration minDuration
-            , sound__maxDuration   = Duration maxDuration
-            , sound__deltaDuration = Duration deltaDuration
-            , sound__envelope      = envelope
-            , sound__constraint    = momentConstraint
-            , sound__instrument    = Instrument instrument
+            sound__pitch             = pitch
+            , sound__velocity        = Velocity velocity
+            , sound__start           = TimePoint start
+            , sound__stop            = TimePoint stop
+            , sound__minDuration     = Duration minDuration
+            , sound__maxDuration     = Duration maxDuration
+            , sound__deltaDuration   = Duration deltaDuration
+            , sound__envelope        = envelope
+            , sound__instrument      = Instrument instrument
+            , sound__horizontalGroup = horizontalGroup
+            , sound__verticalGroup   = verticalGroup
+            , sound__status          = resolutionStatus
+            , sound__constraint      = constraint
             }
 
+-- prop_limitRatio pitchRatios =
+--   forAll genPosRatio (property . isValid . limitRatio)
+--   where isValid x = x >= 1 && x < 2
+
+-- prop_harmonicDistance x =
+--   forAll genLimitedRatio
+--   where a b =
+
+-- prop_harmonicDistance
 -- prop_getGroups3 :: PitchRatio -> Property
 -- prop_getGroups3 pitchRatio =
 --   pitchRatio === PitchRatio (3 % 4)
 --   -- (sum (fmap (length . Map.elems) $ getGroups sounds)) ===
 --   -- (length (Map.elems sounds))
 
+printSampleSound = fmap PP.ppDoc (generate (arbitrary :: Gen Sound))
 printSampleSounds = fmap PP.ppDoc (sample' (arbitrary :: Gen Sound))
 
 return []
