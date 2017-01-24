@@ -11,6 +11,7 @@ import Sequential4
 
 import qualified Data.Map as Map
 import qualified Data.Set as Set
+import Test.HUnit 
 
 import qualified Text.Show.Pretty as PP
 
@@ -68,6 +69,7 @@ instance Arbitrary Sound
           resolutionStatus <- elements [Resolved]
           verticalGroup    <- arbitrary :: Gen Int
           horizontalGroup  <- arbitrary :: Gen Int
+          label            <- elements ["A", "B", "C", "D"]
           return $ Sound {
             sound__pitch             = pitch
             , sound__velocity        = Velocity velocity
@@ -81,12 +83,71 @@ instance Arbitrary Sound
             , sound__horizontalGroup = horizontalGroup
             , sound__verticalGroup   = verticalGroup
             , sound__status          = resolutionStatus
+            , sound__label           = label
             , sound__constraint      = constraint
             }
 
--- prop_limitRatio pitchRatios =
---   forAll genPosRatio (property . isValid . limitRatio)
---   where isValid x = x >= 1 && x < 2
+prop_limitRatio =
+  forAll genPosRatio (property . isValid . limitRatio)
+  where isValid x = x >= 1 && x < 2
+
+-- instance Arbitrary Moment
+--   where arbitrary = do
+--           now <- choose (0, 100)
+--           active <- arbitrary :: Gen (Set Sound)
+--           return $ Moment (TimePoint (now % 1)) active []
+
+-- genSizedPitchRatioSet :: Gen (Set PitchRatio)
+-- genSizedPitchRatioSet = do
+--   size <- choose (3, 20)
+--   ratios <- vectorOf size (arbitrary :: Gen PitchRatio)
+--   return $ Set.fromList ratios
+
+prop_dissonanceScore_1 :: (Set PitchRatio) -> Property
+prop_dissonanceScore_1 pitchRatios =
+  let sorted =
+        sortBy
+        (comparing (\(PitchRatio r) -> harmonicDistance r))
+        (Set.toList pitchRatios)
+  in
+    property $
+    dissonanceScore (drop 1 sorted) >=
+    dissonanceScore (drop 1 . reverse $ sorted)
+
+-- data PitchRatioScore = PitchRatioScore {
+--   pitchRatioScore__score :: Int
+--   , pitchRatioScore__ratio :: PitchRatio
+--   } deriving Show
+
+-- instance Arbitrary PitchRatioScore
+--   where arbitrary = do
+--           (score, ratio) <- elements [
+--             (0, PitchRatio (1 % 1))
+--             , (1, PitchRatio (3 % 2))
+--             , (2, PitchRatio (5 % 4))
+--             , (3, PitchRatio (7 % 4))
+--             , (4, PitchRatio (9 % 8))
+--             , (5, PitchRatio (11 % 8))
+--             ]
+--           return $ PitchRatioScore score ratio
+
+-- prop_dissonanceScore_2 :: [PitchRatioScore] -> [PitchRatioScore] -> Property
+-- prop_dissonanceScore_2 xs ys =
+--   let xsScore = sum $ fmap pitchRatioScore__score xs
+--       ysScore = sum $ fmap pitchRatioScore__score ys
+--       xsRatios = fmap pitchRatioScore__ratio xs
+--       ysRatios = fmap pitchRatioScore__ratio ys
+--       xs_ = (dissonanceScore xsRatios)
+--       ys_ = (dissonanceScore ysRatios)
+--   in
+--     case xs_ > ys_ of
+--       True -> property $ xsScore > ysScore
+--       False -> property True
+
+-- prop_dissonanceScore_2 pitchRatios =
+--   property $
+--   dissonanceScore pitchRatios >=
+--   dissonanceScore (drop 1 pitchRatios)
 
 -- prop_harmonicDistance x =
 --   forAll genLimitedRatio
