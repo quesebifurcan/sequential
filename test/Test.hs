@@ -11,7 +11,7 @@ import Sequential4
 
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import Test.HUnit 
+import Test.HUnit
 
 import qualified Text.Show.Pretty as PP
 
@@ -89,12 +89,12 @@ genPhrase label = do
 instance Arbitrary (Events Text Sound)
   where arbitrary = do
         phraseCount <- choose (1, 7)
-        phrases <- mapM genPhrase (fmap show [0..(phraseCount :: Int)])
-        keyCount <- choose (20, 40)
-        keys <- replicateM keyCount (elements (fmap (\x -> show x :: Text) [0..(phraseCount :: Int)]))
+        phrases     <- mapM genPhrase (fmap show [0..(phraseCount :: Int)])
+        keyCount    <- choose (20, 40)
+        keys        <- replicateM keyCount (elements (fmap (\x -> show x :: Text) [0..(phraseCount :: Int)]))
         case mkEvents keys (Map.unions phrases) of
-          Just result -> return result
-          Nothing      -> panic "Error in quickcheck generator"
+          Just result  -> return result
+          Nothing      -> panic "Error in quickcheck generator; `mkEvents` should never return Nothing"
 
 instance Arbitrary Sound
   where arbitrary = do
@@ -133,17 +133,37 @@ prop_limitRatio =
   forAll genPosRatio (property . isValid . limitRatio)
   where isValid x = x >= 1 && x < 2
 
--- instance Arbitrary Moment
---   where arbitrary = do
---           now <- choose (0, 100)
---           active <- arbitrary :: Gen (Set Sound)
---           k <- vectorOf 5 (elements ["a", "b", "c", "d"])
---           v <- vectorOf 5 (arbitrary :: Gen Sound)
---           events <- mkEvents k (Map.fromList (zipWith (,) k v))
---           return $ Moment
---           (TimePoint (now % 1))
---           active
---           []
+instance Arbitrary Moment
+  where arbitrary = do
+          events <- arbitrary :: Gen (Events Text Sound)
+          return $ Moment
+              (TimePoint (0 % 1))
+              events
+              Set.empty
+              []
+
+iterateN n f = foldr (.) identity (replicate n f)
+
+genMomentRandomState :: Gen Moment
+genMomentRandomState = do
+  moment <- arbitrary :: Gen Moment
+  n      <- choose (0, (length . events__keys . moment__events) moment)
+  return $ iterateN n f moment
+  where f m@(Moment _ events _ result) =
+          case getNextEvent events of
+            Sequential4.Success x -> m {
+              moment__events = x
+              , moment__result = result ++ [soundDefault]
+              }
+            Sequential4.Failure err    -> panic err
+            Sequential4.Done    _      -> m
+
+prop_getNextEvent m@(Moment _ events _ _) =
+  case getNextEvent events of
+    Sequential4.Success result ->
+      property $ (events__curr events) /= (events__curr result)
+    Sequential4.Failure _      -> property False
+    Sequential4.Done    _      -> property $ (events__keys events) == []
 
 -- genSizedPitchRatioSet :: Gen (Set PitchRatio)
 -- genSizedPitchRatioSet = do
@@ -151,16 +171,16 @@ prop_limitRatio =
 --   ratios <- vectorOf size (arbitrary :: Gen PitchRatio)
 --   return $ Set.fromList ratios
 
-prop_dissonanceScore_1 :: (Set PitchRatio) -> Property
-prop_dissonanceScore_1 pitchRatios =
-  let sorted =
-        sortBy
-        (comparing (\(PitchRatio r) -> harmonicDistance r))
-        (Set.toList pitchRatios)
-  in
-    property $
-    dissonanceScore (drop 1 sorted) >=
-    dissonanceScore (drop 1 . reverse $ sorted)
+-- prop_dissonanceScore_1 :: (Set PitchRatio) -> Property
+-- prop_dissonanceScore_1 pitchRatios =
+--   let sorted =
+--         sortBy
+--         (comparing (\(PitchRatio r) -> harmonicDistance r))
+--         (Set.toList pitchRatios)
+--   in
+--     property $
+--     dissonanceScore (drop 1 sorted) >=
+--     dissonanceScore (drop 1 . reverse $ sorted)
 
 -- data PitchRatioScore = PitchRatioScore {
 --   pitchRatioScore__score :: Int
