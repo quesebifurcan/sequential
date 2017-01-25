@@ -52,6 +52,50 @@ instance Arbitrary Pitch
 --   where arbitrary = do
 --           return $ MergeStrategy (\sound moment -> Set.insert sound moment)
 
+incrementalSum :: [Int] -> [Int]
+incrementalSum =
+  snd . foldl' f (0, [])
+  where
+    f (curr, coll) x = (curr + x, coll ++ [curr + x])
+
+slope count start end =
+  (take (count - 1) . repeat $ start) ++ [end]
+
+genGroup :: Int -> Gen [Sound]
+genGroup groupId = do
+  phraseLength     <- choose (1, 10)
+  soundIds         <- fmap incrementalSum $ replicateM phraseLength (choose (0, 1))
+  resolutionStatus <- return $ slope phraseLength Pending Resolved
+  sounds           <- replicateM phraseLength (arbitrary :: Gen Sound)
+  -- groupId          <- arbitrary :: Gen Int
+  return $
+    getZipList $
+    (\soundId status sound ->
+       sound {
+        sound__horizontalGroup = groupId
+        , sound__verticalGroup = soundId
+        , sound__status = status
+        }) <$>
+    ZipList soundIds <*>
+    ZipList resolutionStatus <*>
+    ZipList sounds
+
+genPhrase :: Text -> Gen (Map Text [Sound])
+genPhrase label = do
+  count  <- choose (1, 10)
+  groups <- mapM genGroup [0..count]
+  return $ Map.fromList [(label, concat groups)]
+
+instance Arbitrary (Events Text Sound)
+  where arbitrary = do
+        phraseCount <- choose (1, 7)
+        phrases <- mapM genPhrase (fmap show [0..(phraseCount :: Int)])
+        keyCount <- choose (20, 40)
+        keys <- replicateM keyCount (elements (fmap (\x -> show x :: Text) [0..(phraseCount :: Int)]))
+        case mkEvents keys (Map.unions phrases) of
+          Just result -> return result
+          Nothing      -> panic "Error in quickcheck generator"
+
 instance Arbitrary Sound
   where arbitrary = do
           pitch            <- arbitrary :: Gen Pitch
@@ -69,7 +113,6 @@ instance Arbitrary Sound
           resolutionStatus <- elements [Resolved]
           verticalGroup    <- arbitrary :: Gen Int
           horizontalGroup  <- arbitrary :: Gen Int
-          label            <- elements ["A", "B", "C", "D"]
           return $ Sound {
             sound__pitch             = pitch
             , sound__velocity        = Velocity velocity
@@ -83,7 +126,6 @@ instance Arbitrary Sound
             , sound__horizontalGroup = horizontalGroup
             , sound__verticalGroup   = verticalGroup
             , sound__status          = resolutionStatus
-            , sound__label           = label
             , sound__constraint      = constraint
             }
 
@@ -95,7 +137,13 @@ prop_limitRatio =
 --   where arbitrary = do
 --           now <- choose (0, 100)
 --           active <- arbitrary :: Gen (Set Sound)
---           return $ Moment (TimePoint (now % 1)) active []
+--           k <- vectorOf 5 (elements ["a", "b", "c", "d"])
+--           v <- vectorOf 5 (arbitrary :: Gen Sound)
+--           events <- mkEvents k (Map.fromList (zipWith (,) k v))
+--           return $ Moment
+--           (TimePoint (now % 1))
+--           active
+--           []
 
 -- genSizedPitchRatioSet :: Gen (Set PitchRatio)
 -- genSizedPitchRatioSet = do
