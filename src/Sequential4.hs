@@ -19,7 +19,7 @@ import Control.Monad.State
 import Control.Monad.Trans.Maybe
 import Control.Monad.Error.Class as Error
 import Control.Monad.Trans.Either
-import Control.Monad.Loops (whileM_)
+import Control.Monad.Loops (whileM_, untilM_)
 
 newtype PitchRatio = PitchRatio (Ratio Integer)
   deriving (Enum, Eq, Ord, Num, Show)
@@ -68,7 +68,6 @@ data Sound = Sound {
   -- , sound__isValid      :: Moment -> Bool
   , sound__horizontalGroup :: Int
   , sound__verticalGroup   :: Int
-  , sound__label           :: Text
   , sound__status          :: ResolutionStatus
   , sound__constraint      :: MomentConstraint
   } deriving (Ord, Eq, Show)
@@ -96,7 +95,6 @@ soundDefault =
   , sound__horizontalGroup = 1
   , sound__verticalGroup = 8
   , sound__status = Resolved
-  , sound__label = "A"
   , sound__constraint =
     MomentConstraint
     { momentConstraint__dissonanceLimit =
@@ -129,8 +127,344 @@ data Moment = Moment {
   , moment__events :: Events Text Sound
   , moment__active :: Set Sound
   , moment__result :: [Sound]
+  } deriving Show
+
+getAndRotate k m = do
+  currSeq <- Map.lookup k m
+  currVal <- head currSeq
+  newMap  <- return $
+    Map.insert k (rotate' 1 currSeq) m
+  return (currVal, newMap)
+
+------------------------------------------------------------
+-- Functions
+
+limitRatio :: (Ord a, Fractional a) => a -> a
+limitRatio n
+  | n < 1     = limitRatio (n * 2)
+  | n >= 2    = limitRatio (n / 2)
+  | otherwise = n
+
+harmonicDistance :: Floating a => Ratio Integer -> a
+harmonicDistance r =
+  logBase 2 . fromIntegral $ (numerator r * denominator r)
+
+distinct :: Ord a => [a] -> [a]
+distinct = (Set.toList . Set.fromList)
+
+pairs :: (Foldable t1, Ord t) => t1 t -> [(t, t)]
+pairs set =
+  [(x,y) | let xs = toList set, x <- xs, y <- xs, x < y]
+
+limitedInterval (PitchRatio x, PitchRatio y) =
+  max limX limY / min limX limY
+  where limX = limitRatio x
+        limY = limitRatio y
+
+dissonanceScore ::
+  (Foldable t1, Floating t) => t1 PitchRatio -> t
+dissonanceScore pitchRatios =
+  if count == 0
+    then 0
+    else sum' / (fromIntegral count)
+  where
+    count     = length intervals
+    intervals = distinct (pairs pitchRatios)
+    sum'      = sum $
+      fmap (harmonicDistance . limitedInterval) intervals
+
+getPitchRatios = Set.map (pitch__ratio . sound__pitch)
+
+insertSound m@(Moment now events active result) =
+  m { moment__active = active' }
+  where active' = Set.insert (events__curr events) active
+
+getNextSilence' :: Sound -> TimePoint
+getNextSilence' sound =
+  let (TimePoint start')      = sound__start sound
+      (Duration minDuration') = sound__minDuration sound
+  in TimePoint (start' + minDuration')
+
+getNextSilence = head . sort . Set.toList . (Set.map getNextSilence')
+
+applyDecay :: Moment -> Moment
+applyDecay m@(Moment now _ active _) =
+  m { moment__now = nextTimePoint }
+  where nextTimePoint =
+          case (getNextSilence active) of
+            Nothing -> now
+            Just x -> x
+
+isSoundResolved sound active =
+  not $ Set.member sound active ||
+  any (Set.member sound) resolvedGroups
+  where
+    resolvedGroups = filter isGroupResolved (getGroups active)
+
+canRemove now x xs =
+  minDurationFilled now x && isSoundResolved x xs
+
+filterCanRemove now xs =
+  Set.filter (\x -> canRemove now x xs) xs
+
+groupId x = (sound__verticalGroup x, sound__horizontalGroup x)
+
+getByGroupId sound active =
+  -- Set.member (groupId sound) (Set.map groupId active)
+  head $ Set.filter (\x -> groupId sound == groupId x) active
+
+noActive m@(Moment _ _ active _) = active == Set.empty
+
+-- TODO: insert n sounds into active (no checks applied?)
+-- Use "bypassing" functions in Test.hs
+forceResolve :: State Moment ()
+forceResolve = do
+  modify removeAllRemovable
+  a <- get
+  bool
+    (modify applyDecay)
+    (modify getNextEvent'')
+    (allPending . moment__active $ a)
+  curr <- get
+  if noActive curr
+     then return ()
+     else forceResolve
+  where
+    getNextEvent'' m@(Moment _ events active _) =
+      case getNextEvent' active events of
+        Just x -> m { moment__events = x }
+        Nothing -> m
+
+removeAllRemovable m@(Moment now events active result) =
+  removeSounds (filterCanRemove now active) m
+
+removeSounds toRemove m@(Moment now events active result) =
+  m {
+  moment__active = newActive
+  , moment__result = result ++ (Set.toList removed)
   }
-  deriving Show
+  where newActive = Set.difference active toRemove
+        setStop x = x { sound__stop = now }
+        removed   = Set.map setStop toRemove
+
+resolvePending = undefined
+canResolve = undefined
+
+isConsonant limit active =
+  dissonanceScore (getPitchRatios active) <=
+  dissonanceScore limit
+
+isGroupResolved :: Foldable t => t Sound -> Bool
+isGroupResolved = any ((== Resolved) . sound__status)
+
+allPending :: Foldable t => t Sound -> Bool
+allPending = all ((== Resolved) . sound__status)
+
+getResolvedGroups :: [Set Sound] -> [Set Sound]
+getResolvedGroups = filter isGroupResolved
+
+allResolved active = all isGroupResolved
+
+filterMaxDurationExceeded = undefined
+canMerge = undefined
+tryResolve = undefined
+mergeNext = undefined
+
+run :: State Moment ()
+run = do
+  filterMaxDurationExceeded
+  untilM_ canMerge tryResolve
+  mergeNext
+
+getGroups :: Set Sound -> [Set Sound]
+getGroups =
+  fmap Set.fromList . f . Set.toList
+  where
+    id         = sound__horizontalGroup
+    group'     = (==) `on` id
+    sort'      = sortBy (comparing id)
+    f          = List.groupBy group' . sort'
+
+toDuration (TimePoint x) = Duration x
+toTimePoint (Duration x) = TimePoint x
+
+maxDurationExceeded :: TimePoint -> Sound -> Bool
+maxDurationExceeded now sound =
+  now - start >= maxDuration
+  where
+    getMaxDuration       = toTimePoint . sound__maxDuration
+    (start, maxDuration) = (sound__start sound, getMaxDuration sound)
+
+minDurationFilled :: TimePoint -> Sound -> Bool
+minDurationFilled now sound =
+  (start + minDuration) - now <= 0
+  where
+    getMinDuration       = toTimePoint . sound__minDuration
+    (start, minDuration) = (sound__start sound, getMinDuration sound)
+
+
+isDissonant = undefined
+
+isRemovable = undefined
+
+-- insertSound = undefined
+
+anyRemovable = undefined
+
+anyResolved = undefined
+
+
+isPending = undefined
+
+forwardTime = undefined
+
+reduceDissonance = undefined
+
+reduceCount = undefined
+
+getNextMinDuration = undefined
+
+isMember = undefined
+
+rotate' n xs = zipWith const (drop n (cycle xs)) xs
+
+data NextEventStatus a b = Success a | Failure b | Done a
+  deriving (Eq, Show)
+
+-- getNextEvent' m@(Moment _ (Events _ [] _) _ _) = Done m
+-- getNextEvent' m@(Moment _ (Events curr (k:ks) eventsMap) active _) =
+--   case getAndRotate k eventsMap of
+--     Just (currVal, newMap) ->
+--       Success $ m { moment__events = Events currVal ks newMap }
+--     Nothing                -> Failure "lookup error"
+
+getNextEvent e@(Events _ [] _) = Nothing
+getNextEvent (Events curr (k:ks) m) =
+  case getAndRotate k m of
+    Just (currVal, newMap) -> Just $ Events currVal ks newMap
+    Nothing                -> panic "lookup error"
+
+getNextEvent' active events =
+  case getNextEvent events of
+    Just nextState ->
+      if isInActiveGroup (events__curr nextState) active
+         then Just nextState
+         else getNextEvent' active nextState
+    Nothing -> Nothing
+
+  -- case getAndRotate k m of
+  --   Just (currVal, newMap) -> Success $ Events currVal ks newMap
+  --   Nothing                -> Failure "lookup error"
+
+isInActiveGroup :: Sound -> Set Sound -> Bool
+isInActiveGroup sound active =
+  Set.member a s
+  where
+    a = sound__horizontalGroup sound
+    s = Set.map sound__horizontalGroup active
+
+mkEvents (k:ks) m = do
+  (curr, m') <- getAndRotate k m
+  return $ Events curr ks m'
+
+events = mkEvents ["a", "b", "a"] (Map.fromList [("a", [1,2,3]), ("b", [4,5,6])])
+
+data Run5State = Run5State {
+  events5 :: Events Text Int
+  , coll5 :: [Int]
+  } deriving Show
+
+run7 :: EitherT Text (State Run5State) ()
+run7 = do
+  (Run5State a b) <- get
+  put (Run5State a [8,8,8,8,8,8,8,8])
+  return ()
+
+-- run5 :: EitherT Text (State Run5State) ()
+-- run5 = do
+--   a <- get'''
+--   coll
+--   whileM_ ((\x -> length x > 0) <$> (gets (events__keys . events5))) $ do
+--     nextEvent
+--     a <- get'''
+--     coll
+--   (Run5State a b) <- get
+
+--   -- Inner function using part of state
+--   eights <- return $ (execState . runEitherT) run7 (Run5State a [])
+--   modify (\(Run5State a b) -> Run5State a (b ++ (coll5 eights)))
+
+--   return ()
+
+--   where
+--     get''' = gets (events__curr . events5)
+--     -- nextEvent :: EitherT Text (State ((Events Int), [Int])) ()
+--     nextEvent = do
+--       a <- gets events5
+--       case getNextEvent a of
+--         Success nxt -> modify (\s -> s { events5 = nxt })
+--         Failure err -> left err
+--         Done _ -> left "done"
+
+--     coll :: EitherT Text (State Run5State) ()
+--     coll = modify f
+--       where f s@(Run5State a b) = s { coll5 = b ++ [events__curr a] }
+
+-- asdf =
+--   case events of
+--     Just result -> (runState . runEitherT) run5 (Run5State result [])
+--     Nothing -> panic "no data"
+
+-- Using whileM_ to improve control flow
+run6 :: State (Int, [Int]) ()
+run6 = do
+  replicateM_ 6 (modify (\(a, b) -> (a + 1, b)))
+  whileM_ ((\x -> x < 10) <$> gets fst) $ do
+    modify (\(a, b) -> (a + 1, b ++ [123]))
+  return ()
+
+data Counter = Counter {
+  counter__soundId :: Int
+  , counter__groupId :: Int
+  } deriving Show
+
+counterDefault = Counter 0 0
+
+runGesture :: State (Counter, Int, [(Int, Int)]) ()
+runGesture = do
+  modify incr
+  modify coll
+  modify coll
+  modify incr
+  modify coll
+  where
+    incr (a, b, c) = (a, b + 1, c)
+    coll ((Counter sId gId), b, c) =
+      ((Counter (sId + 1) gId), b, c ++ [(sId, b)])
+
+-- TODO: collect results as map?
+-- run: runState runGestures (counterDefault, DL.empty)
+-- (length . snd .snd) $ runState runGestures (counterDefault, DL.empty)
+runGestures :: State (Counter, DL.DList (Text, [(Int, Int)]) ) ()
+runGestures = do
+  replicateM_ 10000 $ do
+    runSub "a" runGesture
+    runSub "b" runGesture
+    runSub "c" runGesture
+    runSub "c" runGesture
+    runSub "c" runGesture
+    runSub "c" runGesture
+  return ()
+  where
+    runSub ::
+     Text
+     -> State (Counter, Int, [(Int, Int)]) ()
+     -> State (Counter, DL.DList (Text, [(Int, Int)])) ()
+    runSub label f = do
+      (counter, coll) <- get
+      let (l, (a, b, c)) = (label, snd $ runState f (counter, 0, []))
+      modify (\(counter, coll) -> (a, DL.snoc coll (l, c)))
+      return ()
 
 ------------------------------------------------------------
 -- 1. Use Silence
@@ -138,12 +472,12 @@ data Moment = Moment {
 -- nextDuration, sample etc.
 -- spanning several phrases/groups, loop over finite sets of elements
 
-data GestureState = GestureState {
-  -- __scale :: [Int]
-  -- , durs :: [Duration]
-  vels :: [Velocity]
-  , groupId :: Int
-  } deriving (Show)
+-- data GestureState = GestureState {
+--   -- __scale :: [Int]
+--   -- , durs :: [Duration]
+--   vels :: [Velocity]
+--   , groupId :: Int
+--   } deriving (Show)
 
 -- Use ranges for the different params (Pitch etc.)
 -- When exceeding a range, switch to next group (or do something else)
@@ -236,246 +570,3 @@ gestureD = do
 
     -- Just x  -> (x, IndexedScale k' range m)
     -- Nothing -> up 0 (IndexedScale lo range m)
-
-------------------------------------------------------------
--- Functions
-
-limitRatio :: (Ord a, Fractional a) => a -> a
-limitRatio n
-  | n < 1     = limitRatio (n * 2)
-  | n >= 2    = limitRatio (n / 2)
-  | otherwise = n
-
-harmonicDistance :: Floating a => Ratio Integer -> a
-harmonicDistance r =
-  logBase 2 . fromIntegral $ (numerator r * denominator r)
-
-distinct :: Ord a => [a] -> [a]
-distinct = (Set.toList . Set.fromList)
-
-pairs :: (Foldable t1, Ord t) => t1 t -> [(t, t)]
-pairs set =
-  [(x,y) | let xs = toList set, x <- xs, y <- xs, x < y]
-
-limitedInterval (PitchRatio x, PitchRatio y) =
-  max limX limY / min limX limY
-  where limX = limitRatio x
-        limY = limitRatio y
-
-dissonanceScore ::
-  (Foldable t1, Floating t) => t1 PitchRatio -> t
-dissonanceScore pitchRatios =
-  if count == 0
-    then 0
-    else sum' / (fromIntegral count)
-  where
-    count     = length intervals
-    intervals = distinct (pairs pitchRatios)
-    sum'      = sum $
-      fmap (harmonicDistance . limitedInterval) intervals
-
-resolvePending = undefined
-canResolve = undefined
--- canResolve: all pending events can be resolved. If false, trigger
--- forceResolve.
-
--- addSound sound m@(Moment now active result) =
---   case canResolve merged of
---     Right result -> result
---     Left _       -> addSound sound (forceResolve m)
---   where merged = undefined
---         forceResolve = undefined
-
--- Moment date past present future
-
-getPitchRatios = Set.map (pitch__ratio . sound__pitch)
-
-isConsonant limit (Moment _ _ active _) =
-  dissonanceScore (getPitchRatios active) <= limit
-
--- Use when e.g. applyDecay always works (no pending sounds)
-tryResolve1 ::
-  (Moment -> Maybe Moment)
-  -> (Moment -> Moment)
-  -> Moment
-  -> Moment
-tryResolve1 f g m =
-  case f m of
-    Just result -> result
-    Nothing     -> tryResolve1 f g (g m)
-
--- next element vs. next member element
--- Use when short-circuiting (use Either instead?)
-tryResolve2 :: (Moment -> Maybe Moment) -> Moment -> Maybe Moment
-tryResolve2 f m = f m
-
-toDuration (TimePoint x) = Duration x
-toTimePoint (Duration x) = TimePoint x
-
-maxDurationExceeded :: TimePoint -> Sound -> Bool
-maxDurationExceeded now sound =
-  now - start >= maxDuration
-  where
-    getMaxDuration       = toTimePoint . sound__maxDuration
-    (start, maxDuration) = (sound__start sound, getMaxDuration sound)
-
-minDurationFilled :: TimePoint -> Sound -> Bool
-minDurationFilled now sound =
-  (start + minDuration) - now <= 0
-  where
-    getMinDuration       = toTimePoint . sound__minDuration
-    (start, minDuration) = (sound__start sound, getMinDuration sound)
-
-mustRemove now sound = undefined -- maxDurationExceeded now sound
-canRemove now sound = undefined -- minDuration filled, group resolved
-nextToRemove moment = undefined -- oldest sound for which `canRemove` is True
-
-rotate' n xs = zipWith const (drop n (cycle xs)) xs
-
-getAndRotate k m = do
-  currSeq <- Map.lookup k m
-  currVal <- head currSeq
-  newMap  <- return $
-    Map.insert k (rotate' 1 currSeq) m
-  return (currVal, newMap)
-
-data NextEventStatus a b = Success a | Failure b | Done a
-  deriving (Eq, Show)
-
--- Use "curr event" as field on Moment?
-getNextEvent e@(Events _ [] _) = Done e
-getNextEvent (Events curr (k:ks) m) =
-  case getAndRotate k m of
-    Just (currVal, newMap) -> Success $ Events currVal ks newMap
-    Nothing                -> Failure "lookup error"
-
-mkEvents (k:ks) m = do
-  (curr, m') <- getAndRotate k m
-  return $ Events curr ks m'
-
--- asdf =
---   let events = mkEvents ["a", "b"] (Map.fromList [("a", [1,2,3]), ("b", [4,5,6])])
---   in
---     case events of
---       Just result -> Just $ (runEitherT . runState) $ run5 result
---       Nothing -> Nothing
-events = mkEvents ["a", "b", "a"] (Map.fromList [("a", [1,2,3]), ("b", [4,5,6])])
-
-data Run5State = Run5State {
-  events5 :: Events Text Int
-  , coll5 :: [Int]
-  } deriving Show
-
-run7 :: EitherT Text (State Run5State) ()
-run7 = do
-  (Run5State a b) <- get
-  put (Run5State a [8,8,8,8,8,8,8,8])
-  return ()
-
-run5 :: EitherT Text (State Run5State) ()
-run5 = do
-  a <- get'''
-  coll
-  whileM_ ((\x -> length x > 0) <$> (gets (events__keys . events5))) $ do
-    nextEvent
-    a <- get'''
-    coll
-  (Run5State a b) <- get
-
-  -- Inner function using part of state
-  eights <- return $ (execState . runEitherT) run7 (Run5State a [])
-  modify (\(Run5State a b) -> Run5State a (b ++ (coll5 eights)))
-
-  return ()
-
-  where
-    get''' = gets (events__curr . events5)
-    -- nextEvent :: EitherT Text (State ((Events Int), [Int])) ()
-    nextEvent = do
-      a <- gets events5
-      case getNextEvent a of
-        Success nxt -> modify (\s -> s { events5 = nxt })
-        Failure err -> left err
-        Done _ -> left "done"
-
-    coll :: EitherT Text (State Run5State) ()
-    coll = modify f
-      where f s@(Run5State a b) = s { coll5 = b ++ [events__curr a] }
-
-asdf =
-  case events of
-    Just result -> (runState . runEitherT) run5 (Run5State result [])
-    Nothing -> panic "no data"
-
--- Using whileM_ to improve control flow
-run6 :: State (Int, [Int]) ()
-run6 = do
-  replicateM_ 6 (modify (\(a, b) -> (a + 1, b)))
-  whileM_ ((\x -> x < 10) <$> gets fst) $ do
-    modify (\(a, b) -> (a + 1, b ++ [123]))
-  return ()
-
-data Counter = Counter {
-  counter__soundId :: Int
-  , counter__groupId :: Int
-  } deriving Show
-
-counterDefault = Counter 0 0
-
-runGesture :: State (Counter, Int, [(Int, Int)]) ()
-runGesture = do
-  modify incr
-  modify coll
-  modify coll
-  modify incr
-  modify coll
-  where
-    incr (a, b, c) = (a, b + 1, c)
-    coll ((Counter sId gId), b, c) =
-      ((Counter (sId + 1) gId), b, c ++ [(sId, b)])
-
--- TODO: collect results as map?
-runGestures :: State (Counter, [(Text, [(Int, Int)])]) ()
-runGestures = do
-  runSub "a" runGesture
-  runSub "b" runGesture
-  runSub "c" runGesture
-  return ()
-  where
-    runSub ::
-     Text
-     -> State (Counter, Int, [(Int, Int)]) ()
-     -> State (Counter, [(Text, [(Int, Int)])]) ()
-    runSub label f = do
-      (counter, coll) <- get
-      let (l, (a, b, c)) = (label, snd $ runState f (counter, 0, []))
-      modify (\(counter, coll) -> (a, coll ++ [(l, c)]))
-      return ()
-
-isDissonant = undefined
-
-isRemovable = undefined
-
-insertSound = undefined
-
-anyRemovable = undefined
-
-anyResolved = undefined
-
-allResolved = undefined
-
-isPending = undefined
-
-applyDecay = undefined
-
-forwardTime = undefined
-
-reduceDissonance = undefined
-
-reduceCount = undefined
-
-getNextMinDuration = undefined
-
-isMember = undefined
-
-getGroups = undefined

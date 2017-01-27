@@ -42,6 +42,19 @@ instance Arbitrary MomentConstraint
           maxCount        <- choose (1, 10)
           return $ MomentConstraint (Set.fromList dissonanceLimit) maxCount
 
+momentConstraintBypass =
+  MomentConstraint pitchRatios maxCount
+  where
+    pitchRatios =
+      (Set.fromList [PitchRatio (1 % 1) , PitchRatio (100000 % 99999)])
+    maxCount = 10000000000
+
+prop_testBypassMomentConstraint :: Set Sound -> Property
+prop_testBypassMomentConstraint sounds =
+  property $ isConsonant limit sounds
+  where
+    limit = momentConstraint__dissonanceLimit momentConstraintBypass
+
 instance Arbitrary Pitch
   where arbitrary = do
           pitchRatio <- genLimitedRatio
@@ -85,6 +98,12 @@ genPhrase label = do
   count  <- choose (1, 10)
   groups <- mapM genGroup [0..count]
   return $ Map.fromList [(label, concat groups)]
+
+genActive :: Gen (Set Sound)
+genActive = do
+  count  <- choose (1, 10)
+  groups <- mapM genGroup [0..count]
+  return . Set.fromList . concat $ groups
 
 instance Arbitrary (Events Text Sound)
   where arbitrary = do
@@ -151,19 +170,67 @@ genMomentRandomState = do
   return $ iterateN n f moment
   where f m@(Moment _ events _ result) =
           case getNextEvent events of
-            Sequential4.Success x -> m {
+            Just x  -> m {
               moment__events = x
               , moment__result = result ++ [soundDefault]
               }
-            Sequential4.Failure err    -> panic err
-            Sequential4.Done    _      -> m
+            Nothing -> m
 
+-- prop_asdf =
+--   forAll genMomentRandomState prop_getNextEvent
+
+prop_getNextEvent :: Moment -> Property
 prop_getNextEvent m@(Moment _ events _ _) =
   case getNextEvent events of
-    Sequential4.Success result ->
-      property $ (events__curr events) /= (events__curr result)
-    Sequential4.Failure _      -> property False
-    Sequential4.Done    _      -> property $ (events__keys events) == []
+    Nothing     -> property $ (events__keys events) == []
+    Just result -> property $ (events__curr events) /= (events__curr result)
+
+prop_getGroups :: Set Sound -> Property
+prop_getGroups sounds =
+  property $
+  length groups ==
+  Set.size (Set.map sound__horizontalGroup sounds)
+  where
+    groups = getGroups sounds
+
+instance Arbitrary TimePoint
+  where arbitrary = do
+          r <- genPosRatio
+          return $ TimePoint r
+
+prop_canRemove :: TimePoint -> Set Sound -> Property
+prop_canRemove now sounds =
+  property $
+  all (\sound -> minDurationFilled now sound &&
+                 isSoundResolved sound sounds)
+  (filterCanRemove now sounds)
+
+-- prop_forceResolve :: Moment -> Property
+-- prop_forceResolve1 moment =
+--   property $
+--   (moment__active $ snd $ runState forceResolve moment)
+--   ==
+--   Set.empty
+
+-- prop_forceResolve2 moment =
+--   property $
+--   (moment__result $ snd $ runState forceResolve moment)
+--   /=
+--   []
+
+-- prop_getGroupOfSound :: Set Sound -> Property
+-- prop_getGroupOfSound x xs =
+--   property $
+--   (== 1) $
+--   Set.size $
+--   Set.map sound__verticalGroup (getGroupOfSound x (Set.insert x xs))
+
+prop_insertSound :: Moment -> Property
+prop_insertSound m@(Moment now events active result) =
+  property $
+  not (Set.member (events__curr events) (moment__active m))
+  &&
+  Set.member (events__curr events) (moment__active . insertSound $ m)
 
 -- genSizedPitchRatioSet :: Gen (Set PitchRatio)
 -- genSizedPitchRatioSet = do
