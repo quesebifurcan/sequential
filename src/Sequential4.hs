@@ -217,23 +217,23 @@ noActive m@(Moment _ _ active _) = active == Set.empty
 
 -- TODO: insert n sounds into active (no checks applied?)
 -- Use "bypassing" functions in Test.hs
-forceResolve :: State Moment ()
-forceResolve = do
-  modify removeAllRemovable
-  a <- get
-  bool
-    (modify applyDecay)
-    (modify getNextEvent'')
-    (allPending . moment__active $ a)
-  curr <- get
-  if noActive curr
-     then return ()
-     else forceResolve
-  where
-    getNextEvent'' m@(Moment _ events active _) =
-      case getNextEvent' active events of
-        Just x -> m { moment__events = x }
-        Nothing -> m
+-- forceResolve :: State Moment ()
+-- forceResolve = do
+--   modify removeAllRemovable
+--   a <- get
+--   bool
+--     (modify applyDecay)
+--     (modify getNextEvent'')
+--     (allPending . moment__active $ a)
+--   curr <- get
+--   if noActive curr
+--      then return ()
+--      else forceResolve
+--   where
+--     getNextEvent'' m@(Moment _ events active _) =
+--       case getNextEvent' active events of
+--         Just x -> m { moment__events = x }
+--         Nothing -> m
 
 removeAllRemovable m@(Moment now events active result) =
   removeSounds (filterCanRemove now active) m
@@ -313,7 +313,6 @@ anyRemovable = undefined
 
 anyResolved = undefined
 
-
 isPending = undefined
 
 forwardTime = undefined
@@ -338,19 +337,44 @@ data NextEventStatus a b = Success a | Failure b | Done a
 --       Success $ m { moment__events = Events currVal ks newMap }
 --     Nothing                -> Failure "lookup error"
 
-getNextEvent e@(Events _ [] _) = Nothing
+-- TODO: use Maybe for this?
+-- If not, all `nextEvent` functions can be simplified
+-- and whileM can easily be used 
+
+-- getNextEvent e@(Events _ [] _) = Nothing
+-- getNextEvent (Events curr (k:ks) m) =
+--   case getAndRotate k m of
+--     Just (currVal, newMap) -> Just $ Events currVal ks newMap
+--     Nothing                -> panic "lookup error"
+
+-- getNextEvent' active events =
+--   case getNextEvent events of
+--     Just nextState ->
+--       if isInActiveGroup (events__curr nextState) active
+--          then Just nextState
+--          else getNextEvent' active nextState
+--     Nothing -> Nothing
+
+-- getNextEvent e@(Events _ [] _) = Nothing
+-- getNextEvent (Events curr (k:ks) m) =
+--   case getAndRotate k m of
+--     Just (currVal, newMap) -> Just $ Events currVal ks newMap
+--     Nothing                -> panic "lookup error"
+
+getCurr e@(Events _ [] _) = Nothing
+getCurr e@(Events curr _ _) = Just curr
+
+getNextEvent e@(Events _ [] _) = e
 getNextEvent (Events curr (k:ks) m) =
   case getAndRotate k m of
-    Just (currVal, newMap) -> Just $ Events currVal ks newMap
+    Just (currVal, newMap) -> Events currVal ks newMap
     Nothing                -> panic "lookup error"
 
 getNextEvent' active events =
-  case getNextEvent events of
-    Just nextState ->
-      if isInActiveGroup (events__curr nextState) active
-         then Just nextState
-         else getNextEvent' active nextState
-    Nothing -> Nothing
+  if isInActiveGroup (events__curr nextState) active
+    then nextState
+    else getNextEvent' active nextState
+  where nextState = getNextEvent events
 
   -- case getAndRotate k m of
   --   Just (currVal, newMap) -> Success $ Events currVal ks newMap

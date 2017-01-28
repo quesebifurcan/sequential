@@ -11,7 +11,12 @@ import Sequential4
 
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import Test.HUnit
+-- import Test.HUnit
+import Control.Monad.State
+import Control.Monad.Trans.Maybe
+import Control.Monad.Error.Class as Error
+import Control.Monad.Trans.Either
+import Control.Monad.Loops (whileM_, untilM_)
 
 import qualified Text.Show.Pretty as PP
 
@@ -54,6 +59,26 @@ prop_testBypassMomentConstraint sounds =
   property $ isConsonant limit sounds
   where
     limit = momentConstraint__dissonanceLimit momentConstraintBypass
+
+testMomentState :: State Moment ()
+testMomentState = do
+  modify insertSound
+  gets moment__active >>= return . removeSounds >>= modify
+  whenM ((/= []) <$> gets (events__keys . moment__events)) $ do
+    gets moment__events >>= return . getNext >>= modify
+    testMomentState
+  where
+    getNext x = (\m -> m { moment__events = getNextEvent x })
+
+prop_testInsertSound :: Moment -> Property
+prop_testInsertSound moment =
+  length (moment__result result) === (length keys + 1)
+  -- length (moment__result result) === 1
+  where
+    result = snd $ runState testMomentState moment
+    active = moment__active result
+    keys   = (events__keys . moment__events) moment
+
 
 instance Arbitrary Pitch
   where arbitrary = do
@@ -163,27 +188,26 @@ instance Arbitrary Moment
 
 iterateN n f = foldr (.) identity (replicate n f)
 
-genMomentRandomState :: Gen Moment
-genMomentRandomState = do
-  moment <- arbitrary :: Gen Moment
-  n      <- choose (0, (length . events__keys . moment__events) moment)
-  return $ iterateN n f moment
-  where f m@(Moment _ events _ result) =
-          case getNextEvent events of
-            Just x  -> m {
-              moment__events = x
-              , moment__result = result ++ [soundDefault]
-              }
-            Nothing -> m
+-- genMomentRandomState :: Gen Moment
+-- genMomentRandomState = do
+--   moment <- arbitrary :: Gen Moment
+--   n      <- choose (0, (length . events__keys . moment__events) moment)
+--   return $ iterateN n f moment
+--   where f m@(Moment _ events _ result) =
+--           case getNextEvent events of
+--             Just x  -> m {
+--               moment__events = x
+--               , moment__result = result ++ [soundDefault]
+--               }
+--             Nothing -> m
 
 -- prop_asdf =
 --   forAll genMomentRandomState prop_getNextEvent
 
-prop_getNextEvent :: Moment -> Property
-prop_getNextEvent m@(Moment _ events _ _) =
-  case getNextEvent events of
-    Nothing     -> property $ (events__keys events) == []
-    Just result -> property $ (events__curr events) /= (events__curr result)
+-- prop_getNextEvent :: Moment -> Property
+-- prop_getNextEvent m@(Moment _ events _ _) =
+--   property $ (events__curr events) /= (events__curr result)
+--   where result = getNextEvent events
 
 prop_getGroups :: Set Sound -> Property
 prop_getGroups sounds =
