@@ -153,8 +153,8 @@ getLeastRecentlyUpdated groups
 
 data Moment = Moment {
   moment__now      :: TimePoint
-  , moment__events :: Events Text Sound
-  , moment__active :: Set Sound
+  , moment__events :: [Group Int Sound]
+  , moment__active :: Set (Group Int Sound)
   , moment__result :: [Sound]
   } deriving Show
 
@@ -204,11 +204,6 @@ dissonanceScore pitchRatios =
 
 getPitchRatios = Set.map (pitch__ratio . sound__pitch)
 
-insertSound m@(Moment now events active result) =
-  m { moment__active = active' }
-  where active' = Set.insert (new { sound__start = now }) active
-        new     = (events__curr events)
-
 getNextSilence' :: Sound -> TimePoint
 getNextSilence' sound =
   let (TimePoint start')      = sound__start sound
@@ -217,13 +212,13 @@ getNextSilence' sound =
 
 getNextSilence = head . sort . Set.toList . (Set.map getNextSilence')
 
-applyDecay :: Moment -> Moment
-applyDecay m@(Moment now _ active _) =
-  m { moment__now = nextTimePoint }
-  where nextTimePoint =
-          case (getNextSilence active) of
-            Nothing -> now
-            Just x -> x
+-- applyDecay :: Moment -> Moment
+-- applyDecay m@(Moment now _ active _) =
+--   m { moment__now = nextTimePoint }
+--   where nextTimePoint =
+--           case (getNextSilence active) of
+--             Nothing -> now
+--             Just x -> x
 
 isSoundResolved sound active =
   (not (Set.member sound active)) ||
@@ -247,28 +242,28 @@ getByGroupId sound active =
 
 noActive m@(Moment _ _ active _) = active == Set.empty
 
--- TODO: insert n sounds into active (no checks applied?)
--- Use "bypassing" functions in Test.hs
-forceResolve :: State Moment ()
-forceResolve = do
-  modify removeAllRemovable
-  a <- get
-  bool
-    (modify applyDecay)
-    (gets moment__events >>= return . getNext >>= modify)
-    (allPending . moment__active $ a)
-  curr <- get
-  ks <- gets (events__keys . moment__events)
-  -- if (noActive curr || ks == [])
-  if noActive curr
-     then return ()
-     else forceResolve
-  where
-    getNext x = (\m ->
-                let active = moment__active m
-                in
-                  m { moment__events = getNextEvent' active x }
-                  )
+-- -- TODO: insert n sounds into active (no checks applied?)
+-- -- Use "bypassing" functions in Test.hs
+-- forceResolve :: State Moment ()
+-- forceResolve = do
+--   modify removeAllRemovable
+--   a <- get
+--   bool
+--     (modify applyDecay)
+--     (gets moment__events >>= return . getNext >>= modify)
+--     (allPending . moment__active $ a)
+--   curr <- get
+--   ks <- gets (events__keys . moment__events)
+--   -- if (noActive curr || ks == [])
+--   if noActive curr
+--      then return ()
+--      else forceResolve
+--   where
+--     getNext x = (\m ->
+--                 let active = moment__active m
+--                 in
+--                   m { moment__events = getNextEvent' active x }
+--                   )
 
     -- getNextEvent'' m@(Moment _ events active _) =
     --   case getNextEvent' active events of
@@ -277,17 +272,17 @@ forceResolve = do
 
 -- Resolution of Groups independent of seq?
 
-removeAllRemovable m@(Moment now events active result) =
-  removeSounds (filterCanRemove now active) m
+-- removeAllRemovable m@(Moment now events active result) =
+--   removeSounds (filterCanRemove now active) m
 
-removeSounds toRemove m@(Moment now events active result) =
-  m {
-  moment__active = newActive
-  , moment__result = result ++ (Set.toList removed)
-  }
-  where newActive = Set.difference active toRemove
-        setStop x = x { sound__stop = now }
-        removed   = Set.map setStop toRemove
+-- removeSounds toRemove m@(Moment now events active result) =
+--   m {
+--   moment__active = newActive
+--   , moment__result = result ++ (Set.toList removed)
+--   }
+--   where newActive = Set.difference active toRemove
+--         setStop x = x { sound__stop = now }
+--         removed   = Set.map setStop toRemove
 
 resolvePending = undefined
 canResolve = undefined

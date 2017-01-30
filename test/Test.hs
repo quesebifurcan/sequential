@@ -60,24 +60,24 @@ prop_testBypassMomentConstraint sounds =
   where
     limit = momentConstraint__dissonanceLimit momentConstraintBypass
 
-testMomentState :: State Moment ()
-testMomentState = do
-  modify insertSound
-  gets moment__active >>= return . removeSounds >>= modify
-  whenM ((/= []) <$> gets (events__keys . moment__events)) $ do
-    gets moment__events >>= return . getNext >>= modify
-    testMomentState
-  where
-    getNext x = (\m -> m { moment__events = getNextEvent x })
+-- testMomentState :: State Moment ()
+-- testMomentState = do
+--   modify insertSound
+--   gets moment__active >>= return . removeSounds >>= modify
+--   whenM ((/= []) <$> gets (events__keys . moment__events)) $ do
+--     gets moment__events >>= return . getNext >>= modify
+--     testMomentState
+--   where
+--     getNext x = (\m -> m { moment__events = getNextEvent x })
 
-prop_testInsertSound :: Moment -> Property
-prop_testInsertSound moment =
-  length (moment__result result) === (length keys + 1)
-  -- length (moment__result result) === 1
-  where
-    result = snd $ runState testMomentState moment
-    active = moment__active result
-    keys   = (events__keys . moment__events) moment
+-- prop_testInsertSound :: Moment -> Property
+-- prop_testInsertSound moment =
+--   length (moment__result result) === (length keys + 1)
+--   -- length (moment__result result) === 1
+--   where
+--     result = snd $ runState testMomentState moment
+--     active = moment__active result
+--     keys   = (events__keys . moment__events) moment
 
 instance Arbitrary (Group Int Sound)
   where arbitrary = do
@@ -150,23 +150,23 @@ genGroup groupId = do
     ZipList resolutionStatus <*>
     ZipList sounds
 
-rm :: State Moment ()
-rm = do
-  -- modify removeAllRemovable
-  -- curr <- get
-  modify removeAllRemovable
-  m@(Moment now events active result) <- get
-  if active == Set.empty
-     then return ()
-     else (do (modify applyDecay)
-              rm)
+-- rm :: State Moment ()
+-- rm = do
+--   -- modify removeAllRemovable
+--   -- curr <- get
+--   modify removeAllRemovable
+--   m@(Moment now events active result) <- get
+--   if active == Set.empty
+--      then return ()
+--      else (do (modify applyDecay)
+--               rm)
 
-prop_removeAllRemovable =
-  forAll genMomentRandomState f
+-- prop_removeAllRemovable =
+--   forAll genMomentRandomState f
 
-  where f m@(Moment now events active result) =
-          (moment__active $ snd $ runState rm m) == Set.empty
-          -- property $ (moment__active . rm) m === Set.empty
+  -- where f m@(Moment now events active result) =
+  --         (moment__active $ snd $ runState rm m) == Set.empty
+  --         -- property $ (moment__active . rm) m === Set.empty
 
 genPhrase :: Text -> Gen (Map Text [Sound])
 genPhrase label = do
@@ -233,7 +233,7 @@ prop_limitRatio =
 
 instance Arbitrary Moment
   where arbitrary = do
-          events <- arbitrary :: Gen (Events Text Sound)
+          events <- arbitrary :: Gen [Group Int Sound]
           return $ Moment
               (TimePoint (0 % 1))
               events
@@ -242,20 +242,20 @@ instance Arbitrary Moment
 
 iterateN n f = foldr (.) identity (replicate n f)
 
-genMomentRandomState :: Gen Moment
-genMomentRandomState = do
-  moment <- arbitrary :: Gen Moment
-  n      <- choose (1, (length . events__keys . moment__events $ moment) - 0)
-  return $
-    execState (insertN n) moment
+-- genMomentRandomState :: Gen Moment
+-- genMomentRandomState = do
+--   moment <- arbitrary :: Gen Moment
+--   n      <- choose (1, (length . events__keys . moment__events $ moment) - 0)
+--   return $
+--     execState (insertN n) moment
 
-insertN :: Int -> State Moment ()
-insertN n = do
-  replicateM_ n $ do
-    modify insertSound
-    gets moment__events >>= return . getNext >>= modify
-  where
-    getNext x = (\m -> m { moment__events = getNextEvent x })
+-- insertN :: Int -> State Moment ()
+-- insertN n = do
+--   replicateM_ n $ do
+--     modify insertSound
+--     gets moment__events >>= return . getNext >>= modify
+--   where
+--     getNext x = (\m -> m { moment__events = getNextEvent x })
 
 -- prop_asdf =
 --   forAll genMomentRandomState prop_getNextEvent
@@ -292,38 +292,39 @@ prop_canRemove now sounds =
 -- top-level seq: [Group] (instead of Events)
 -- for insertion: 1. delete all curr elts in group 2. keep all elts in group
 
-prop_getNextEvent' :: Property
-prop_getNextEvent' =
-  forAll genMomentRandomState f
-  where f m@(Moment now events active result) =
-          (not (null active)) ==>
-          Set.member
-          (sound__horizontalGroup next)
-          (Set.map sound__horizontalGroup active)
-          where
-            next =
-              case events__curr events == (events__curr $ getNextEvent' active events) of
-                True -> panic "oijsdf"
-                False -> events__curr $ getNextEvent' active events
+-- prop_getNextEvent' :: Property
+-- prop_getNextEvent' =
+--   forAll genMomentRandomState f
+--   where f m@(Moment now events active result) =
+--           (not (null active)) ==>
+--           Set.member
+--           (sound__horizontalGroup next)
+--           (Set.map sound__horizontalGroup active)
+--           where
+--             next =
+--               case events__curr events == (events__curr $ getNextEvent' active events) of
+--                 True -> panic "oijsdf"
+--                 False -> events__curr $ getNextEvent' active events
 
 -- prop_removeAllRemovable
 
-prop_forceResolve1 :: Property
-prop_forceResolve1 =
-  forAll genMomentRandomState f
-  where
-    f m@(Moment now events active result) =
-      (not (null active)) ==>
-      (moment__active $ snd $ runState forceResolve m)
-      ===
-      Set.empty
+-- prop_forceResolve1 :: Property
+-- prop_forceResolve1 =
+--   forAll genMomentRandomState f
+--   where
+--     f m@(Moment now events active result) =
+--       (not (null active)) ==>
+--       (moment__active $ snd $ runState forceResolve m)
+--       ===
+--       Set.empty
 
-prop_applyDecay =
-  forAll genMomentRandomState f
-  where
-    f m@(Moment now events active result) =
-      (not (null active)) ==>
-      (moment__now $ applyDecay m) > now
+-- prop_applyDecay =
+--   forAll genMomentRandomState f
+--   where
+--     f m@(Moment now events active result) =
+--       (not (null active)) ==>
+--       (moment__now $ applyDecay m) > now
+
 -- prop_forceResolve2 moment =
 --   property $
 --   (moment__result $ snd $ runState forceResolve moment)
@@ -337,18 +338,18 @@ prop_applyDecay =
 --   Set.size $
 --   Set.map sound__verticalGroup (getGroupOfSound x (Set.insert x xs))
 
-prop_insertSound :: Moment -> Property
-prop_insertSound m@(Moment now events active result) =
-  -- property $
-  -- not (Set.member (events__curr events) (moment__active m))
-  -- &&
-  -- Set.member (events__curr events) (moment__active . insertSound $ m)
-  -- &&
-  let newState = insertSound (m { moment__now = TimePoint (13 % 1) })
-  in
-    case head (moment__active newState) of
-      Just x -> sound__start x === TimePoint (13%1)
-      Nothing -> property True
+-- prop_insertSound :: Moment -> Property
+-- prop_insertSound m@(Moment now events active result) =
+--   -- property $
+--   -- not (Set.member (events__curr events) (moment__active m))
+--   -- &&
+--   -- Set.member (events__curr events) (moment__active . insertSound $ m)
+--   -- &&
+--   let newState = insertSound (m { moment__now = TimePoint (13 % 1) })
+--   in
+--     case head (moment__active newState) of
+--       Just x -> sound__start x === TimePoint (13%1)
+--       Nothing -> property True
 
   -- all (\x -> sound__start x == now) (moment__active . insertSound $ m)
 
