@@ -122,6 +122,11 @@ data Events a b = Events {
   , events__map :: Map a [b]
   } deriving (Eq, Show)
 
+data Group a = Group {
+  group__pending :: [Sound]
+  , group__active :: Set Sound
+  } deriving (Ord, Eq, Show)
+
 data Moment = Moment {
   moment__now      :: TimePoint
   , moment__events :: Events Text Sound
@@ -177,7 +182,8 @@ getPitchRatios = Set.map (pitch__ratio . sound__pitch)
 
 insertSound m@(Moment now events active result) =
   m { moment__active = active' }
-  where active' = Set.insert (events__curr events) active
+  where active' = Set.insert (new { sound__start = now }) active
+        new     = (events__curr events)
 
 getNextSilence' :: Sound -> TimePoint
 getNextSilence' sound =
@@ -196,8 +202,10 @@ applyDecay m@(Moment now _ active _) =
             Just x -> x
 
 isSoundResolved sound active =
-  not $ Set.member sound active ||
+  (not (Set.member sound active)) ||
+  -- not $ Set.member sound active ||
   any (Set.member sound) resolvedGroups
+  -- any (Set.member sound) [active]
   where
     resolvedGroups = filter isGroupResolved (getGroups active)
 
@@ -217,23 +225,33 @@ noActive m@(Moment _ _ active _) = active == Set.empty
 
 -- TODO: insert n sounds into active (no checks applied?)
 -- Use "bypassing" functions in Test.hs
--- forceResolve :: State Moment ()
--- forceResolve = do
---   modify removeAllRemovable
---   a <- get
---   bool
---     (modify applyDecay)
---     (modify getNextEvent'')
---     (allPending . moment__active $ a)
---   curr <- get
---   if noActive curr
---      then return ()
---      else forceResolve
---   where
---     getNextEvent'' m@(Moment _ events active _) =
---       case getNextEvent' active events of
---         Just x -> m { moment__events = x }
---         Nothing -> m
+forceResolve :: State Moment ()
+forceResolve = do
+  modify removeAllRemovable
+  a <- get
+  bool
+    (modify applyDecay)
+    (gets moment__events >>= return . getNext >>= modify)
+    (allPending . moment__active $ a)
+  curr <- get
+  ks <- gets (events__keys . moment__events)
+  -- if (noActive curr || ks == [])
+  if noActive curr
+     then return ()
+     else forceResolve
+  where
+    getNext x = (\m ->
+                let active = moment__active m
+                in
+                  m { moment__events = getNextEvent' active x }
+                  )
+
+    -- getNextEvent'' m@(Moment _ events active _) =
+    --   case getNextEvent' active events of
+    --     Just x -> m { moment__events = x }
+    --     Nothing -> m
+
+-- Resolution of Groups independent of seq?
 
 removeAllRemovable m@(Moment now events active result) =
   removeSounds (filterCanRemove now active) m
@@ -258,7 +276,7 @@ isGroupResolved :: Foldable t => t Sound -> Bool
 isGroupResolved = any ((== Resolved) . sound__status)
 
 allPending :: Foldable t => t Sound -> Bool
-allPending = all ((== Resolved) . sound__status)
+allPending = all ((== Pending) . sound__status)
 
 getResolvedGroups :: [Set Sound] -> [Set Sound]
 getResolvedGroups = filter isGroupResolved
@@ -339,7 +357,7 @@ data NextEventStatus a b = Success a | Failure b | Done a
 
 -- TODO: use Maybe for this?
 -- If not, all `nextEvent` functions can be simplified
--- and whileM can easily be used 
+-- and whileM can easily be used
 
 -- getNextEvent e@(Events _ [] _) = Nothing
 -- getNextEvent (Events curr (k:ks) m) =
@@ -370,15 +388,22 @@ getNextEvent (Events curr (k:ks) m) =
     Just (currVal, newMap) -> Events currVal ks newMap
     Nothing                -> panic "lookup error"
 
-getNextEvent' active events =
-  if isInActiveGroup (events__curr nextState) active
-    then nextState
-    else getNextEvent' active nextState
-  where nextState = getNextEvent events
+-- getNextEvent' active events =
+--   if isInActiveGroup (events__curr nextState) active
+--     then nextState
+--     else getNextEvent' active nextState
+--   where nextState = getNextEvent events
 
-  -- case getAndRotate k m of
-  --   Just (currVal, newMap) -> Success $ Events currVal ks newMap
-  --   Nothing                -> Failure "lookup error"
+getNextEvent' active e@(Events _ [] _) = e
+getNextEvent' active e@(Events curr (k:ks) eMap)
+  | null active || null ks = e
+  | otherwise =
+    case getAndRotate k eMap of
+      Just (currVal, newMap) ->
+        if isInActiveGroup currVal active
+          then Events currVal ks newMap
+          else getNextEvent' active (Events curr ks eMap)
+      Nothing                -> panic "lookup error"
 
 isInActiveGroup :: Sound -> Set Sound -> Bool
 isInActiveGroup sound active =

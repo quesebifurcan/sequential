@@ -79,7 +79,6 @@ prop_testInsertSound moment =
     active = moment__active result
     keys   = (events__keys . moment__events) moment
 
-
 instance Arbitrary Pitch
   where arbitrary = do
           pitchRatio <- genLimitedRatio
@@ -103,7 +102,7 @@ genGroup :: Int -> Gen [Sound]
 genGroup groupId = do
   phraseLength     <- choose (1, 10)
   soundIds         <- fmap incrementalSum $ replicateM phraseLength (choose (0, 1))
-  resolutionStatus <- return $ slope phraseLength Pending Resolved
+  resolutionStatus <- return $ slope 1 Resolved Resolved
   sounds           <- replicateM phraseLength (arbitrary :: Gen Sound)
   -- groupId          <- arbitrary :: Gen Int
   return $
@@ -117,6 +116,24 @@ genGroup groupId = do
     ZipList soundIds <*>
     ZipList resolutionStatus <*>
     ZipList sounds
+
+rm :: State Moment ()
+rm = do
+  -- modify removeAllRemovable
+  -- curr <- get
+  modify removeAllRemovable
+  m@(Moment now events active result) <- get
+  if active == Set.empty
+     then return ()
+     else (do (modify applyDecay)
+              rm)
+
+prop_removeAllRemovable =
+  forAll genMomentRandomState f
+
+  where f m@(Moment now events active result) =
+          (moment__active $ snd $ runState rm m) == Set.empty
+          -- property $ (moment__active . rm) m === Set.empty
 
 genPhrase :: Text -> Gen (Map Text [Sound])
 genPhrase label = do
@@ -134,7 +151,11 @@ instance Arbitrary (Events Text Sound)
   where arbitrary = do
         phraseCount <- choose (1, 7)
         phrases     <- mapM genPhrase (fmap show [0..(phraseCount :: Int)])
-        keyCount    <- choose (20, 40)
+        keyCount    <- choose (2000, 4000)
+        -- N.B. currently invalid -- in order for `keys` to result in a valid
+        -- seq (which can be used by e.g. getNextEvent'), it needs to
+        -- match the counts in phrases (number of sounds in phrase). This
+        -- is problematic -- use a different data structure?
         keys        <- replicateM keyCount (elements (fmap (\x -> show x :: Text) [0..(phraseCount :: Int)]))
         case mkEvents keys (Map.unions phrases) of
           Just result  -> return result
@@ -147,8 +168,8 @@ instance Arbitrary Sound
           start            <- genPosRatio
           -- TODO: `stop` should be greater than `start` + `minDuration`
           stop             <- genPosRatio
-          minDuration      <- genPosRatio
-          maxDuration      <- genPosRatio
+          minDuration      <- return (1 % 1)
+          maxDuration      <- return (2 % 1)
           deltaDuration    <- genPosRatio
           envelope         <- elements [Impulse, Sustained]
           constraint       <- arbitrary :: Gen MomentConstraint
@@ -188,18 +209,20 @@ instance Arbitrary Moment
 
 iterateN n f = foldr (.) identity (replicate n f)
 
--- genMomentRandomState :: Gen Moment
--- genMomentRandomState = do
---   moment <- arbitrary :: Gen Moment
---   n      <- choose (0, (length . events__keys . moment__events) moment)
---   return $ iterateN n f moment
---   where f m@(Moment _ events _ result) =
---           case getNextEvent events of
---             Just x  -> m {
---               moment__events = x
---               , moment__result = result ++ [soundDefault]
---               }
---             Nothing -> m
+genMomentRandomState :: Gen Moment
+genMomentRandomState = do
+  moment <- arbitrary :: Gen Moment
+  n      <- choose (1, (length . events__keys . moment__events $ moment) - 0)
+  return $
+    execState (insertN n) moment
+
+insertN :: Int -> State Moment ()
+insertN n = do
+  replicateM_ n $ do
+    modify insertSound
+    gets moment__events >>= return . getNext >>= modify
+  where
+    getNext x = (\m -> m { moment__events = getNextEvent x })
 
 -- prop_asdf =
 --   forAll genMomentRandomState prop_getNextEvent
@@ -229,13 +252,45 @@ prop_canRemove now sounds =
                  isSoundResolved sound sounds)
   (filterCanRemove now sounds)
 
--- prop_forceResolve :: Moment -> Property
--- prop_forceResolve1 moment =
---   property $
---   (moment__active $ snd $ runState forceResolve moment)
---   ==
---   Set.empty
+-- TODO: can a different kind of ordering be used? Objective: avoid fragile,
+-- , difficult-to-validate logic in constructor functions + ambiguity
+-- in the "cycle" machinery.
+-- Groups: insert group if not already present.
+-- top-level seq: [Group] (instead of Events)
+-- for insertion: 1. delete all curr elts in group 2. keep all elts in group
 
+prop_getNextEvent' :: Property
+prop_getNextEvent' =
+  forAll genMomentRandomState f
+  where f m@(Moment now events active result) =
+          (not (null active)) ==>
+          Set.member
+          (sound__horizontalGroup next)
+          (Set.map sound__horizontalGroup active)
+          where
+            next =
+              case events__curr events == (events__curr $ getNextEvent' active events) of
+                True -> panic "oijsdf"
+                False -> events__curr $ getNextEvent' active events
+
+-- prop_removeAllRemovable
+
+prop_forceResolve1 :: Property
+prop_forceResolve1 =
+  forAll genMomentRandomState f
+  where
+    f m@(Moment now events active result) =
+      (not (null active)) ==>
+      (moment__active $ snd $ runState forceResolve m)
+      ===
+      Set.empty
+
+prop_applyDecay =
+  forAll genMomentRandomState f
+  where
+    f m@(Moment now events active result) =
+      (not (null active)) ==>
+      (moment__now $ applyDecay m) > now
 -- prop_forceResolve2 moment =
 --   property $
 --   (moment__result $ snd $ runState forceResolve moment)
@@ -251,10 +306,18 @@ prop_canRemove now sounds =
 
 prop_insertSound :: Moment -> Property
 prop_insertSound m@(Moment now events active result) =
-  property $
-  not (Set.member (events__curr events) (moment__active m))
-  &&
-  Set.member (events__curr events) (moment__active . insertSound $ m)
+  -- property $
+  -- not (Set.member (events__curr events) (moment__active m))
+  -- &&
+  -- Set.member (events__curr events) (moment__active . insertSound $ m)
+  -- &&
+  let newState = insertSound (m { moment__now = TimePoint (13 % 1) })
+  in
+    case head (moment__active newState) of
+      Just x -> sound__start x === TimePoint (13%1)
+      Nothing -> property True
+
+  -- all (\x -> sound__start x == now) (moment__active . insertSound $ m)
 
 -- genSizedPitchRatioSet :: Gen (Set PitchRatio)
 -- genSizedPitchRatioSet = do
