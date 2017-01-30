@@ -117,15 +117,39 @@ data MomentConstraint = MomentConstraint {
 newtype Instruments = Instruments (Map Text Instrument) deriving Show
 
 data Events a b = Events {
-  events__curr :: b
+  events__curr   :: b
   , events__keys :: [a]
-  , events__map :: Map a [b]
+  , events__map  :: Map a [b]
   } deriving (Eq, Show)
 
-data Group a = Group {
-  group__pending :: [Sound]
-  , group__active :: Set Sound
+data Group a b = Group {
+  group__id        :: a
+  , group__pending :: [b]
+  , group__active  :: Set b
   } deriving (Ord, Eq, Show)
+
+isPendingGroup = not . null . group__pending
+
+nextGroupState g@(Group id pending active) =
+  case head pending of
+    Just result -> Right $
+      g { group__active = Set.insert result active }
+    Nothing     -> Left g
+
+firstStart xs =
+  head . sort . fmap sound__start . Set.toList $ xs
+
+lowestBy f = sortBy (comparing f)
+
+hasActive (Group _ _ active) = not $ null active
+
+getLeastRecentlyUpdated groups
+  | null active = Nothing
+  | otherwise   = min' active
+  where
+    min'     = head . sortBy (comparing getStart)
+    getStart = fmap sound__start . Set.toList . group__active
+    active   = filter hasActive groups
 
 data Moment = Moment {
   moment__now      :: TimePoint
