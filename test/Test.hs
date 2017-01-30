@@ -79,6 +79,13 @@ prop_testInsertSound moment =
     active = moment__active result
     keys   = (events__keys . moment__events) moment
 
+instance Arbitrary (Group Int Sound)
+  where arbitrary = do
+          id <- arbitrary :: Gen Int
+          -- sounds <- listOf1 (arbitrary :: Gen Sound)
+          sounds <- arbitrary :: Gen (Set Sound)
+          return $ Group id [] sounds
+
 instance Arbitrary Pitch
   where arbitrary = do
           pitchRatio <- genLimitedRatio
@@ -88,6 +95,32 @@ instance Arbitrary Pitch
 -- instance Arbitrary MergeStrategy
 --   where arbitrary = do
 --           return $ MergeStrategy (\sound moment -> Set.insert sound moment)
+
+genGroup' :: TimePoint -> Gen (Group Int Sound)
+genGroup' timePoint = do
+  g@(Group id pending active) <- arbitrary :: Gen (Group Int Sound)
+  return $
+    g { group__active = Set.map setStart active }
+  where
+    setStart x = x { sound__start = timePoint }
+
+genGroups' :: Gen [(Group Int Sound)]
+genGroups' = do
+  count <- choose (1, 10)
+  timePoints <- vectorOf count (arbitrary :: Gen TimePoint)
+  groups <- mapM genGroup' (sort timePoints)
+  return groups
+
+prop_leastRecent :: Property
+prop_leastRecent =
+  forAll genGroups' test
+  where
+    test :: [(Group Int Sound)] -> Property
+    test groups =
+      case (head $ filter hasActive groups
+           , getLeastRecentlyUpdated groups) of
+        (Just x, Just y) -> x === y
+        (Nothing, y) -> y === Nothing
 
 incrementalSum :: [Int] -> [Int]
 incrementalSum =
