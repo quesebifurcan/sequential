@@ -83,8 +83,10 @@ instance Arbitrary (Group Int Sound)
   where arbitrary = do
           id <- arbitrary :: Gen Int
           -- sounds <- listOf1 (arbitrary :: Gen Sound)
-          sounds <- arbitrary :: Gen (Set Sound)
-          return $ Group id [] sounds
+          pending <- arbitrary :: Gen [Sound]
+          active <- arbitrary :: Gen (Set Sound)
+          resolutionPriority <- arbitrary :: Gen Int
+          return $ Group id pending active [] resolutionPriority
 
 instance Arbitrary Pitch
   where arbitrary = do
@@ -98,7 +100,7 @@ instance Arbitrary Pitch
 
 genGroup' :: TimePoint -> Gen (Group Int Sound)
 genGroup' timePoint = do
-  g@(Group id pending active) <- arbitrary :: Gen (Group Int Sound)
+  g@(Group id pending active result _) <- arbitrary :: Gen (Group Int Sound)
   return $
     g { group__active = Set.map setStart active }
   where
@@ -121,6 +123,17 @@ prop_leastRecent =
            , getLeastRecentlyUpdated groups) of
         (Just x, Just y) -> x === y
         (Nothing, y) -> y === Nothing
+
+prop_nextGroupState :: TimePoint -> Group Int Sound -> Property
+prop_nextGroupState now g@(Group id pending active result _) =
+  case (head pending, nextState) of
+    (Nothing, Left group) -> group === g
+    (Just sound, Right group) ->
+      Set.member now (Set.map sound__start . group__active $ group) .&&.
+      (length (group__pending g) - length (group__pending group)) === 1
+    _ -> property False
+  where
+    nextState = nextGroupState now g
 
 incrementalSum :: [Int] -> [Int]
 incrementalSum =
@@ -424,3 +437,47 @@ runTests = $quickCheckAll
 
 main = do
   runTests
+
+instance Arbitrary MomentAlias
+  where arbitrary = do
+          now <- genPosRatio
+          pendingCount <- choose (1, 5)
+          pending <- vectorOf pendingCount (arbitrary :: Gen GroupAlias)
+          active <- vectorOf pendingCount (arbitrary :: Gen GroupAlias)
+          return $ Moment' (TimePoint now) pending (Set.fromList active) []
+
+instance Arbitrary GroupAlias
+  where arbitrary = do
+          id <- arbitrary :: Gen Int
+          pendingCount <- choose (0, 5)
+          pending <- vectorOf pendingCount (arbitrary :: Gen EventAlias)
+          activeCount <- choose (0, 5)
+          active <- vectorOf activeCount (arbitrary :: Gen EventAlias)
+          priority <- arbitrary :: Gen Int
+          return $ Group' id pending (Set.fromList active) [] priority
+
+prop_removeEvent :: MomentAlias -> Property
+prop_removeEvent moment =
+  let activeEventsCount = Set.size . getEvents
+      getEvents = Set.unions . fmap group'__active . Set.toList . moment'__active
+  in
+    case removeEvent moment of
+      Just result -> (activeEventsCount moment) - (activeEventsCount result) === 1
+      Nothing -> getEvents moment === Set.empty
+
+instance Arbitrary EventAlias
+  where arbitrary = do
+          minDuration <- genPosRatio
+          maxDuration <- genPosRatio
+          deltaN <- choose (0, 100)
+          value <- arbitrary :: Gen Int
+          fn <- elements [TestFn1]
+          return $
+            Event'
+            (TimePoint 0)
+            (TimePoint 0)
+            (Duration minDuration)
+            (Duration (minDuration + maxDuration))
+            (Duration (deltaN % 1))
+            (abs value)
+            fn

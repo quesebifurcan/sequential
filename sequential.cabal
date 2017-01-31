@@ -30,7 +30,8 @@ library
                        transformers >= 0.5,
                        pretty-show,
                        HUnit,
-                       monad-loops >= 0.4
+                       monad-loops >= 0.4,
+                       validation
 
 test-suite sequential-test
  type:                exitcode-stdio-1.0
