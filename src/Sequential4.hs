@@ -654,6 +654,12 @@ gestureD = do
 
 --------------------------------------------------------------
 
+data GroupAppend = GroupLegato | GroupSustain
+  deriving (Ord, Eq, Show)
+
+data GroupRemove = GroupRemoveAll | GroupRemoveOne
+  deriving (Ord, Eq, Show)
+
 data Moment' a b = Moment' {
   moment'__now       :: a
   , moment'__pending :: [b]
@@ -667,6 +673,8 @@ data Group' a b = Group' {
   , group'__active  :: Set b
   , group'__result  :: [b]
   , group'__resolutionPriority :: Int
+  , group'__onAppend :: GroupAppend
+  , group'__onRemove :: GroupRemove
   } deriving (Eq, Show)
 
 instance Ord GroupAlias
@@ -682,8 +690,8 @@ data Event' a b = Event' {
   , event'__getNextState      :: b
   } deriving (Ord, Eq, Show)
 
-nextGroupState' now g@(Group' _ [] active _ _) = Right g
-nextGroupState' now g@(Group' _ (x:xs) active _ _) =
+nextGroupState' now g@(Group' _ [] active _ _ _ _) = Right g
+nextGroupState' now g@(Group' _ (x:xs) active _ _ _ _) =
   bool (Left g) (Right nextState) (isGroupValid nextState)
   where
     nextState = g {
@@ -786,7 +794,7 @@ split l = case head l of
   Just result -> Just (result, tailSafe l)
   Nothing -> Nothing
 
-removeFromGroupAt now toRemove g@(Group' _ _ active result _) =
+removeFromGroupAt now toRemove g@(Group' _ _ active result _ _ _) =
   g {
   group'__active   = Set.delete toRemove active
   , group'__result = result ++ [setStop now toRemove]
@@ -839,22 +847,30 @@ qwer f a = case a of
   Just a' -> Just $ f a'
   Nothing -> Nothing
 
-runMoment m@(Moment' _ pending active _) =
+runMomentOnce m@(Moment' _ pending active _) =
   f NewGroup newGroups <|>
   f PendingGroup pendingGroups <|>
   f ActiveGroup activeGroups <|>
   f EmptyGroup emptyGroups &
   defaultGroup
   where
-    newGroups     = filter (\x -> not . memberBy group'__id x $ active) pending
-    groups        = sortByResolutionPriority $ active
-    pendingGroups = filter (not . null . group'__pending) $ groups
-    activeGroups  = filter (not . null . group'__active) $ pendingGroups
-    emptyGroups   = pendingGroups
-    f g           = fmap g . head
-    defaultGroup  = maybe NoGroup identity
+    hasPending     = not . null . group'__pending
+    hasActive      = not . null . group'__active
+    isMember group = memberBy group'__id group $ active
+    allGroups      = sortByResolutionPriority $ active
+    newGroups      = filter (not . isMember) pending
+    pendingGroups  = filter hasPending allGroups
+    activeGroups   = filter hasActive allGroups
+    emptyGroups    = filter (\x -> not $ hasActive x || hasPending x) allGroups
+    f g            = fmap g . head
+    defaultGroup   = maybe NoGroup identity
 
-data MomentStatus a = NewGroup a | PendingGroup a | ActiveGroup a | EmptyGroup a | NoGroup
+data GroupStatus a =
+  NewGroup a
+  | PendingGroup a
+  | ActiveGroup a
+  | EmptyGroup a
+  | NoGroup
   deriving (Eq, Show)
 
 removeEvent2 :: MaybeT (State MomentAlias) MomentAlias
@@ -874,7 +890,7 @@ removeEvent2 = do
     nextGroup groups = head . sortByResolutionPriority $
       Set.filter (not . null . group'__active) groups
     nextEvent group = head . Set.toList . group'__active $ group
-    removeFromGroup now toRemove g@(Group' _ _ active result _) =
+    removeFromGroup now toRemove g@(Group' _ _ active result _ _ _) =
       g {
       group'__active   = Set.delete toRemove active
       , group'__result = result ++ [setStop now toRemove]
@@ -1008,7 +1024,7 @@ advanceActiveState m@(Moment' now pending active result) = do
 --   where
 --     applyDecay' m = m { moment'__now = (moment'__now m) + (TimePoint 1000) }
 
-activate now g@(Group' _ pending active result _) =
+activate now g@(Group' _ pending active result _ _ _) =
   -- TODO: this is the insert action which can be customized by an Event
   if all (canRemove now) active
      then Right $ g {

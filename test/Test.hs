@@ -451,7 +451,10 @@ instance Arbitrary GroupAlias
           activeCount <- choose (0, 5)
           active <- vectorOf activeCount (arbitrary :: Gen EventAlias)
           priority <- arbitrary :: Gen Int
-          return $ Group' id pending (Set.fromList active) [] priority
+          return $
+            Group'
+            id pending (Set.fromList active) []
+            priority GroupSustain GroupRemoveAll
 
 prop_removeEvent :: MomentAlias -> Property
 prop_removeEvent moment =
