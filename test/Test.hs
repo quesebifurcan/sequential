@@ -435,13 +435,10 @@ printSampleSounds = fmap PP.ppDoc (sample' (arbitrary :: Gen Sound))
 return []
 runTests = $quickCheckAll
 
-main = do
-  runTests
-
 instance Arbitrary MomentAlias
   where arbitrary = do
           now <- genPosRatio
-          pendingCount <- choose (1, 5)
+          pendingCount <- choose (0, 5)
           pending <- vectorOf pendingCount (arbitrary :: Gen GroupAlias)
           active <- vectorOf pendingCount (arbitrary :: Gen GroupAlias)
           return $ Moment' (TimePoint now) pending (Set.fromList active) []
@@ -460,10 +457,33 @@ prop_removeEvent :: MomentAlias -> Property
 prop_removeEvent moment =
   let activeEventsCount = Set.size . getEvents
       getEvents = Set.unions . fmap group'__active . Set.toList . moment'__active
+      removeEvent m = fst $ (runState . runMaybeT $ removeEvent2) m
   in
     case removeEvent moment of
-      Just result -> (activeEventsCount moment) - (activeEventsCount result) === 1
+      Just result ->
+        ((activeEventsCount moment) - (activeEventsCount result) === 1) .&&.
+        (all (minDurationFilled' (moment'__now result))
+         (concat . fmap group'__result . Set.toList . moment'__active $ result))
       Nothing -> getEvents moment === Set.empty
+
+prop_removeGroup :: MomentAlias -> Property
+prop_removeGroup moment =
+  let activeGroupsCount = length . getEmptyGroups
+      getEmptyGroups = filter isEmptyGroup . Set.toList . moment'__active
+  in
+    case removeGroup moment of
+      Just result -> (activeGroupsCount moment) - (activeGroupsCount result) === 1
+      Nothing -> (activeGroupsCount moment) === 0
+
+prop_addGroup :: MomentAlias -> Property
+prop_addGroup moment =
+  case addGroup moment of
+    Just result ->
+      (Set.size . moment'__active $ result) -
+      (Set.size . moment'__active $ moment) === 1
+    Nothing -> case head . moment'__pending $ moment of
+      Just x -> property $ memberBy group'__id x (moment'__active moment)
+      Nothing -> property True
 
 instance Arbitrary EventAlias
   where arbitrary = do
@@ -481,3 +501,6 @@ instance Arbitrary EventAlias
             (Duration (deltaN % 1))
             (abs value)
             fn
+
+main = do
+  runTests

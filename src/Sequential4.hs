@@ -15,6 +15,7 @@ import qualified Data.Set as Set
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.DList as DL
+import qualified Control.Arrow as Arrow
 import Control.Monad.State
 import Control.Monad.Trans.Maybe
 import Control.Monad.Error.Class as Error
@@ -666,7 +667,10 @@ data Group' a b = Group' {
   , group'__active  :: Set b
   , group'__result  :: [b]
   , group'__resolutionPriority :: Int
-  } deriving (Ord, Eq, Show)
+  } deriving (Eq, Show)
+
+instance Ord GroupAlias
+  where compare x y = compare (group'__id x) (group'__id y)
 
 data Event' a b = Event' {
   event'__start               :: TimePoint
@@ -711,23 +715,23 @@ memberBy f x xs = Set.member (f x) (Set.map f xs)
 --   -- get next group
 --   return ()
 
-runMoment' m@(Moment' now [] active result)
-  | active == Set.empty = m
-  | otherwise = m {
-      -- TODO: this is the "removal" phase; it can be customized by each Event.
-      moment'__active = Set.empty
-      , moment'__result = result ++ Set.toList active
-      }
+-- runMoment' m@(Moment' now [] active result)
+--   | active == Set.empty = m
+--   | otherwise = m {
+--       -- TODO: this is the "removal" phase; it can be customized by each Event.
+--       moment'__active = Set.empty
+--       , moment'__result = result ++ Set.toList active
+--       }
 
-runMoment' m@(Moment' now groups@(g:gs) active result)
-  | memberBy group'__id g active = runMoment' $ nextState'''' m
-  | otherwise =
-    if isValidMoment merged
-        then merged { moment'__pending = gs }
-        else runMoment' $ nextState'''' m
-  where
-    isValidMoment m = True -- TODO: unfold and check all states
-    merged = m { moment'__active = Set.insert g active }
+-- runMoment' m@(Moment' now groups@(g:gs) active result)
+--   | memberBy group'__id g active = runMoment' $ nextState'''' m
+--   | otherwise =
+--     if isValidMoment merged
+--         then merged { moment'__pending = gs }
+--         else runMoment' $ nextState'''' m
+--   where
+--     isValidMoment m = True -- TODO: unfold and check all states
+--     merged = m { moment'__active = Set.insert g active }
 
 -- anyPending m@(Moment' now pending active result) = not (null pending)
 -- anyActive m@(Moment' now pending active result) = not (null active)
@@ -782,27 +786,121 @@ split l = case head l of
   Just result -> Just (result, tailSafe l)
   Nothing -> Nothing
 
-removeFromGroup toRemove now g@(Group' _ _ active result _) =
+removeFromGroupAt now toRemove g@(Group' _ _ active result _) =
   g {
-  group'__active = Set.delete toRemove active
+  group'__active   = Set.delete toRemove active
   , group'__result = result ++ [setStop now toRemove]
   }
 
 setStart now event = event { event'__start = now }
 setStop now event = event { event'__stop = now }
 
+isEmptyGroup group =
+  (null . group'__active $ group) && (null . group'__pending $ group)
+
 removeEvent :: MomentAlias -> Maybe MomentAlias
 removeEvent m@(Moment' now _ active _) = do
   (g, gs)   <- splitByNextGroup active
   (e, es)   <- splitByNextEvent g
   timePoint <- return $ bool now (getNextSilence' e) (minDurationFilled' now e)
-  newGroup  <- return $ removeFromGroup e timePoint g
-  newActive <- return $ Set.union (Set.singleton newGroup) (Set.fromList gs)
+  newGroup  <- return $ removeFromGroupAt timePoint e g
+  -- newActive <- return $ Set.union (Set.singleton newGroup) (Set.fromList gs)
+  newActive <- return $ Set.insert newGroup active
   return $ m { moment'__now = timePoint, moment'__active = newActive }
   where
     splitByNextGroup groups = split . sortByResolutionPriority $
       Set.filter (not . null . group'__active) groups
     splitByNextEvent group = split . Set.toList . group'__active $ group
+
+maybeGet f = maybe mzero return f
+setActive x m = m { moment'__active = x }
+setResult x m = m { moment'__result = x }
+
+-- runMoment m@(Moment' now pending active result) =
+--   case (groupToAdd, eventToAdd, eventToRemove, groupToRemove) of
+--     (Just group, _,                   _,                   _)          -> m
+--     (Nothing,    Just (group, event), _,                   _)          -> m
+--     (Nothing,    Nothing,             Just (group, event), _)          -> m
+--     (Nothing,    Nothing,             Nothing,             Just group) -> m
+--     (Nothing,    Nothing,             Nothing,             Nothing)    -> m
+--   where
+--     groupToAdd    = head $ filter (\x -> not . memberBy group'__id x $ active) pending
+--     groups        = sortByResolutionPriority $ active
+--     groupToRemove = head groups
+--     eventToAdd    = eventToModify group'__pending
+--     eventToRemove = eventToModify group'__active
+--     eventToModify f = do
+--       group <- head . filter (not . null. f) $ groups
+--       event <- head . f $ group
+--       return (group, event)
+
+qwer :: (t -> a) -> Maybe t -> Maybe a
+qwer f a = case a of
+  Just a' -> Just $ f a'
+  Nothing -> Nothing
+
+runMoment m@(Moment' _ pending active _) =
+  f NewGroup newGroups <|>
+  f PendingGroup pendingGroups <|>
+  f ActiveGroup activeGroups <|>
+  f EmptyGroup emptyGroups &
+  defaultGroup
+  where
+    newGroups     = filter (\x -> not . memberBy group'__id x $ active) pending
+    groups        = sortByResolutionPriority $ active
+    pendingGroups = filter (not . null . group'__pending) $ groups
+    activeGroups  = filter (not . null . group'__active) $ pendingGroups
+    emptyGroups   = pendingGroups
+    f g           = fmap g . head
+    defaultGroup  = maybe NoGroup identity
+
+data MomentStatus a = NewGroup a | PendingGroup a | ActiveGroup a | EmptyGroup a | NoGroup
+  deriving (Eq, Show)
+
+removeEvent2 :: MaybeT (State MomentAlias) MomentAlias
+removeEvent2 = do
+  m@(Moment' now _ active _) <- get
+  g <- maybeGet $ nextGroup active
+  e <- maybeGet $ nextEvent g
+  whileM_ (do now <- gets moment'__now
+              return $ not . minDurationFilled' now $ e) $ do
+    modify applyDecay'
+  m@(Moment' now _ active _) <- get
+  g' <- return $ removeFromGroup now e g
+  modify (setActive $ Set.insert g' active)
+  get >>= return
+  where
+    applyDecay' m = m { moment'__now = (moment'__now m) + (TimePoint 1000) }
+    nextGroup groups = head . sortByResolutionPriority $
+      Set.filter (not . null . group'__active) groups
+    nextEvent group = head . Set.toList . group'__active $ group
+    removeFromGroup now toRemove g@(Group' _ _ active result _) =
+      g {
+      group'__active   = Set.delete toRemove active
+      , group'__result = result ++ [setStop now toRemove]
+      }
+
+removeEventFromGroup2 :: MaybeT (State GroupAlias) ()
+removeEventFromGroup2 = do
+  event <- gets (head . Set.toList . group'__active) >>= maybeGet
+
+  return ()
+
+removeGroup :: MomentAlias -> Maybe MomentAlias
+removeGroup m@(Moment' _ _ active result) = do
+  (g, gs)   <- splitByNextGroup active
+  newActive <- return $ Set.delete g (Set.fromList gs)
+  return $ m { moment'__active = newActive
+             , moment'__result = result ++ [g] }
+  where
+    splitByNextGroup groups =
+      split . sortByResolutionPriority $ Set.filter isEmptyGroup groups
+
+addGroup :: MomentAlias -> Maybe MomentAlias
+addGroup m@(Moment' now pending active result) = do
+  group <- head pending
+  guard (not (memberBy group'__id group active))
+  return $ m { moment'__active = Set.insert group active }
 
 getNextSilence' :: EventAlias -> TimePoint
 getNextSilence' event =
@@ -810,12 +908,9 @@ getNextSilence' event =
       (Duration minDuration') = event'__minDuration event
   in TimePoint (start' + minDuration')
 
-getNextSilence = head . sort . Set.toList . (Set.map getNextSilence')
+-- use state in order to be able to modify e.g. `now` directly from inside group
 
--- getNextValidTimePoint now event =
---   if minDurationFilled' now event
---      then now
---      else
+getNextSilence = head . sort . Set.toList . (Set.map getNextSilence')
 
 minDurationFilled' now event =
   (start + minDuration) - now <= 0
@@ -823,10 +918,10 @@ minDurationFilled' now event =
     getMinDuration       = toTimePoint . event'__minDuration
     (start, minDuration) = (event'__start event, getMinDuration event)
 
-data MomentStatus a =
-  MomentResolved a
-  | MomentPending a
-  deriving (Eq, Show)
+-- data MomentStatus a =
+--   MomentResolved a
+--   | MomentPending a
+--   deriving (Eq, Show)
 
 oij2 :: EitherT Int (State (Int, Int)) ()
 oij2 = do
@@ -843,7 +938,10 @@ oij2 = do
 oij3 :: MaybeT (State Int) Int
 oij3 = do
   a <- get
-  guard (a < 10)
+  -- guard (a < 10)
+  maybe mzero return (head [])
+  -- mzero
+  put 83
   return a
 
 runOij3 :: Int -> Maybe Int
@@ -891,23 +989,24 @@ advanceActiveState m@(Moment' now pending active result) = do
 -- TODO: different actions if pending is empty etc.
 -- specify simple return types for all states of Group and Moment (their
 -- basic "unfolding" operations are quite similar)
-nextState'''' m@(Moment' now pending active result) =
-  case (head .
-        sortBy (comparing group'__resolutionPriority) .
-        Set.toList) active of
-    Just group ->
-      case activate now group of
-        Right newGroup -> m { moment'__active =
-                              Set.insert newGroup
-                              (Set.delete group active) }
-        Left oldGroup -> nextState'''' (applyDecay' m)
-    Nothing ->
-      case head pending of
-        Just newGroup -> m { moment'__active =
-                             Set.insert newGroup active }
-        Nothing -> m
-  where
-    applyDecay' m = m { moment'__now = (moment'__now m) + (TimePoint 1000) }
+
+-- nextState'''' m@(Moment' now pending active result) =
+--   case (head .
+--         sortBy (comparing group'__resolutionPriority) .
+--         Set.toList) active of
+--     Just group ->
+--       case activate now group of
+--         Right newGroup -> m { moment'__active =
+--                               Set.insert newGroup
+--                               (Set.delete group active) }
+--         Left oldGroup -> nextState'''' (applyDecay' m)
+--     Nothing ->
+--       case head pending of
+--         Just newGroup -> m { moment'__active =
+--                              Set.insert newGroup active }
+--         Nothing -> m
+--   where
+--     applyDecay' m = m { moment'__now = (moment'__now m) + (TimePoint 1000) }
 
 activate now g@(Group' _ pending active result _) =
   -- TODO: this is the insert action which can be customized by an Event
@@ -928,48 +1027,48 @@ activate now g@(Group' _ pending active result _) =
         getMinDuration       = toTimePoint . event'__minDuration
         (start, minDuration) = (event'__start event, getMinDuration event)
 
-asdf =
-  Moment'
-  { moment'__now = TimePoint (13 % 32)
-  , moment'__pending =
-    [ Group'
-      { group'__id = 24
-      , group'__pending =
-        [ Event'
-          { event'__start = TimePoint (0 % 1)
-          , event'__stop = TimePoint (0 % 1)
-          , event'__minDuration = Duration (11 % 8)
-          , event'__maxDuration = Duration (277 % 88)
-          , event'__delta = Duration (18 % 1)
-          , event'__value = 11
-          , event'__getNextState = TestFn1
-          }
-        ]
-      , group'__active = Set.fromList []
-      , group'__result = []
-      , group'__resolutionPriority = 3
-      }
-    , Group'
-      { group'__id = -21
-      , group'__pending =
-        [ Event'
-          { event'__start = TimePoint (0 % 1)
-          , event'__stop = TimePoint (0 % 1)
-          , event'__minDuration = Duration (50 % 29)
-          , event'__maxDuration = Duration (3928 % 899)
-          , event'__delta = Duration (26 % 1)
-          , event'__value = 25
-          , event'__getNextState = TestFn1
-          }
-        ]
-      , group'__active = Set.fromList []
-      , group'__result = []
-      , group'__resolutionPriority = 13
-      }
-    ]
-  , moment'__active = Set.fromList []
-  , moment'__result = []
-  }
+-- asdf =
+--   Moment'
+--   { moment'__now = TimePoint (13 % 32)
+--   , moment'__pending =
+--     [ Group'
+--       { group'__id = 24
+--       , group'__pending =
+--         [ Event'
+--           { event'__start = TimePoint (0 % 1)
+--           , event'__stop = TimePoint (0 % 1)
+--           , event'__minDuration = Duration (11 % 8)
+--           , event'__maxDuration = Duration (277 % 88)
+--           , event'__delta = Duration (18 % 1)
+--           , event'__value = 11
+--           , event'__getNextState = TestFn1
+--           }
+--         ]
+--       , group'__active = Set.fromList []
+--       , group'__result = []
+--       , group'__resolutionPriority = 3
+--       }
+--     , Group'
+--       { group'__id = -21
+--       , group'__pending =
+--         [ Event'
+--           { event'__start = TimePoint (0 % 1)
+--           , event'__stop = TimePoint (0 % 1)
+--           , event'__minDuration = Duration (50 % 29)
+--           , event'__maxDuration = Duration (3928 % 899)
+--           , event'__delta = Duration (26 % 1)
+--           , event'__value = 25
+--           , event'__getNextState = TestFn1
+--           }
+--         ]
+--       , group'__active = Set.fromList []
+--       , group'__result = []
+--       , group'__resolutionPriority = 13
+--       }
+--     ]
+--   , moment'__active = Set.fromList []
+--   , moment'__result = []
+--   }
 
   -- nextSound <- head $ Set.toList active -- TODO: sort by resolutionPriority
   -- return nextSound
@@ -1024,3 +1123,20 @@ asdf =
   --       (runMoment' groups (resolveMoment m))
   --       nextMoment
   --       (isMomentValid nextMoment)
+
+data Moment'' a b = Moment'' {
+  moment''__now       :: a
+  , moment''__pending :: [b]
+  , moment''__active  :: Set b
+  , moment''__result  :: [b]
+  } deriving (Eq, Show)
+
+data Event'' a b = Event'' {
+  event''__start               :: TimePoint
+  , event''__stop              :: TimePoint
+  , event''__minDuration       :: Duration
+  , event''__maxDuration       :: Duration
+  , event''__delta             :: Duration
+  , event''__value             :: a
+  , event''__getNextState      :: b
+  } deriving (Ord, Eq, Show)
