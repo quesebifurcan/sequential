@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -651,7 +652,6 @@ gestureD = do
     -- Just x  -> (x, IndexedScale k' range m)
     -- Nothing -> up 0 (IndexedScale lo range m)
 
-
 --------------------------------------------------------------
 
 data GroupAppend = GroupLegato | GroupSustain
@@ -668,13 +668,13 @@ data Moment' a b = Moment' {
   } deriving (Eq, Show)
 
 data Group' a b = Group' {
-  group'__id        :: a
-  , group'__pending :: [b]
-  , group'__active  :: Set b
-  , group'__result  :: [b]
+  group'__id                   :: a
+  , group'__pending            :: [b]
+  , group'__active             :: Set b
+  , group'__result             :: [b]
   , group'__resolutionPriority :: Int
-  , group'__onAppend :: GroupAppend
-  , group'__onRemove :: GroupRemove
+  , group'__onAppend           :: GroupAppend
+  , group'__onRemove           :: GroupRemove
   } deriving (Eq, Show)
 
 instance Ord GroupAlias
@@ -847,11 +847,17 @@ qwer f a = case a of
   Just a' -> Just $ f a'
   Nothing -> Nothing
 
+handleNewGroup g m = m { moment'__active = Set.insert g (moment'__active m) }
+handlePendingGroup g m = m { moment'__active = Set.insert g (moment'__active m) }
+handleActiveGroup g m = m { moment'__active = Set.insert g (moment'__active m) }
+handleEmptyGroup g m = m { moment'__active = Set.insert g (moment'__active m) }
+handleNoGroup m = m
+
 runMomentOnce m@(Moment' _ pending active _) =
-  f NewGroup newGroups <|>
-  f PendingGroup pendingGroups <|>
-  f ActiveGroup activeGroups <|>
-  f EmptyGroup emptyGroups &
+  f newGroups     handleNewGroup <|>
+  f pendingGroups handlePendingGroup <|>
+  f activeGroups  handleActiveGroup <|>
+  f emptyGroups   handleEmptyGroup &
   defaultGroup
   where
     hasPending     = not . null . group'__pending
@@ -862,8 +868,8 @@ runMomentOnce m@(Moment' _ pending active _) =
     pendingGroups  = filter hasPending allGroups
     activeGroups   = filter hasActive allGroups
     emptyGroups    = filter (\x -> not $ hasActive x || hasPending x) allGroups
-    f g            = fmap g . head
-    defaultGroup   = maybe NoGroup identity
+    f x g          = g <$> head x <*> pure m
+    defaultGroup   = maybe m identity
 
 data GroupStatus a =
   NewGroup a
@@ -872,6 +878,35 @@ data GroupStatus a =
   | EmptyGroup a
   | NoGroup
   deriving (Eq, Show)
+
+-- getGroupFn status =
+--   case status of
+--     NewGroup a
+--     PendingGroup a
+--     ActiveGroup a
+--     EmptyGroup a
+--     NoGroup
+
+-- getGroupFn status =
+--   groupFunction'__appendLegato    :: Group a b -> Group a b
+--   , groupFunction'__appendSustain :: Group a b -> Group a b
+--   , groupFunction'__removeAll     :: Group a b -> Group a b
+--   , groupFunction'__removeOne     :: Group a b -> Group a b
+
+-- runMomentOnce :: MomentAlias -> MomentAlias
+-- runMomentOnce m@(Moment' _ pending active result) =
+--   case getMomentOperation m of
+--     NewGroup group ->
+--       m { moment'__active = Set.insert group active }
+--     PendingGroup group ->
+--       let next = (group'__onAppend group) $ group
+--       in m
+--         -- m {
+--         -- moment'__active = Set.insert next active
+--         -- }
+--     ActiveGroup group -> m
+--     EmptyGroup group -> m
+--     NoGroup -> m
 
 removeEvent2 :: MaybeT (State MomentAlias) MomentAlias
 removeEvent2 = do
