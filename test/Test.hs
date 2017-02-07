@@ -494,7 +494,7 @@ instance Arbitrary EventAlias
           maxDuration <- genPosRatio
           deltaN <- choose (0, 100)
           value <- arbitrary :: Gen Int
-          fn <- elements [TestFn1]
+          fn <- elements [Event'Params 10 10 Event'Legato Event'RemoveAll]
           return $
             Event'
             (TimePoint 0)

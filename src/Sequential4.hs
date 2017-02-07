@@ -22,6 +22,7 @@ import Control.Monad.Trans.Maybe
 import Control.Monad.Error.Class as Error
 import Control.Monad.Trans.Either
 import Control.Monad.Loops (orM, whileM_, whileM, untilM_)
+import Control.Monad.Logic
 
 import Data.Validation as Validation
 
@@ -687,7 +688,20 @@ data Event' a b = Event' {
   , event'__maxDuration       :: Duration
   , event'__delta             :: Duration
   , event'__value             :: a
-  , event'__getNextState      :: b
+  , event'__transitionParams  :: b
+  } deriving (Ord, Eq, Show)
+
+data Event'Append = Event'Legato | Event'Sustain
+  deriving (Ord, Eq, Show)
+
+data Event'Remove = Event'RemoveAll | Event'RemoveOne
+  deriving (Ord, Eq, Show)
+
+data Event'Params = Event'Params {
+  event'Params__maxCount :: Int
+  , event'Params__maxSum :: Int
+  , event'Params__onAppend :: Event'Append
+  , event'Params__onRemove :: Event'Remove
   } deriving (Ord, Eq, Show)
 
 nextGroupState' now g@(Group' _ [] active _ _ _ _) = Right g
@@ -699,15 +713,44 @@ nextGroupState' now g@(Group' _ (x:xs) active _ _ _ _) =
       , group'__active = Set.insert (x { event'__start = now }) active
       }
 
+data A = A { a__maxCount :: Int, a__type :: Event'Append }
+data B = B { b__maxCount :: Int, b__diss :: Int, b__type :: Event'Append }
+
+class NextStateTest a where
+  appendTo   :: a -> (Moment' b c -> Moment' b c)
+  isValidMoment :: a -> Moment' b c -> Bool
+
+instance NextStateTest A where
+  appendTo (A x _) =
+    (\y -> case length (moment'__pending y) > x of
+        True -> let active = moment'__active y
+                in
+                  y { moment'__result = Set.toList active
+                    , moment'__active = Set.empty }
+        False -> y { moment'__pending = [] })
+  isValidMoment (A x _) (Moment' _ _ active _) = Set.size active < x
+
+-- TODO: how encode variations `removeOne` and `removeAll`?
+instance NextStateTest B where
+  appendTo (B x _ Event'Legato) =
+    (\y -> case length (moment'__active y) > x of
+        True -> y
+        False -> y { moment'__pending = [] })
+  appendTo (B x _ Event'Sustain) = identity
+  isValidMoment (B x y _) (Moment' _ pending active _) =
+    length pending > x && Set.size active < y
+
+-- instance NextStateTest B where
+--   appendTo (B x y z) = (\xx -> x + y + z + xx)
+  -- removeFrom (B x y z) = (\xx -> xx - (x + y + z))
+
 isGroupValid  g = True
 isMomentValid m = True
 resolveMoment m = undefined
 resolveGroup g = undefined
 -- getNextGroup m = undefined
 
-data TestFns = TestFn1 | TestFn2 deriving (Ord, Eq, Show)
-
-type EventAlias = Event' Int TestFns
+type EventAlias = Event' Int Event'Params
 type GroupAlias = Group' Int EventAlias
 type MomentAlias = Moment' TimePoint GroupAlias
 
@@ -842,13 +885,17 @@ setResult x m = m { moment'__result = x }
 --       event <- head . f $ group
 --       return (group, event)
 
-qwer :: (t -> a) -> Maybe t -> Maybe a
-qwer f a = case a of
-  Just a' -> Just $ f a'
-  Nothing -> Nothing
+appendLegato g = undefined
+appendSustain = undefined
 
 handleNewGroup g m = m { moment'__active = Set.insert g (moment'__active m) }
 handlePendingGroup g m = m { moment'__active = Set.insert g (moment'__active m) }
+-- handlePendingGroup g m =
+--   -- TODO: incremented `now`?
+--   where
+--     updateFn = case group'__onAppend of
+--       GroupLegato -> appendLegato
+--       GroupSustain -> appendSustain
 handleActiveGroup g m = m { moment'__active = Set.insert g (moment'__active m) }
 handleEmptyGroup g m = m { moment'__active = Set.insert g (moment'__active m) }
 handleNoGroup m = m
@@ -870,6 +917,37 @@ runMomentOnce m@(Moment' _ pending active _) =
     emptyGroups    = filter (\x -> not $ hasActive x || hasPending x) allGroups
     f x g          = g <$> head x <*> pure m
     defaultGroup   = maybe m identity
+
+-- groupNextPending ::
+--   (MonadState (Group' a b) m, MonadPlus m, Ord b) =>
+--   (b -> b) -> m (Group' a b)
+
+nextPending :: MaybeT (State Int) ()
+nextPending = do
+  maybe mzero return (head [])
+  put 123
+  -- a@(Moment' now pending active result) <- get
+  -- g <- gets (head . sortByResolutionPriority . moment'__active)
+  -- group  <- maybe mzero return
+  return ()
+  -- event' <- return $ eventF event
+  -- modify (setPending $ drop 1)
+  -- modify (setActive $ Set.insert event')
+  -- return group
+  -- where
+  --   setPending f group = group { group'__pending = f . group'__pending $ group }
+  --   setActive f group  = group { group'__active = f . group'__active $ group }
+
+runPending m@(Moment' _ pending active _) = do
+  -- allGroups     <- return $ sortByResolutionPriority $ active
+
+  group <- head . filter hasPending . sortByResolutionPriority $ active
+  event <- head . group'__pending $ group
+
+  return m
+  where
+    hasPending     = not . null . group'__pending
+    hasActive      = not . null . group'__active
 
 data GroupStatus a =
   NewGroup a
@@ -1175,19 +1253,186 @@ activate now g@(Group' _ pending active result _ _ _) =
   --       nextMoment
   --       (isMomentValid nextMoment)
 
-data Moment'' a b = Moment'' {
-  moment''__now       :: a
-  , moment''__pending :: [b]
-  , moment''__active  :: Set b
-  , moment''__result  :: [b]
+-- run'' event m@(Moment'' now pending active result) =
+--   if memberBy event''__groupId event pending
+--      then run''2
+--      else m { moment''__pending = Set.insert event pending }
+
+----------------------------------------------------------------------
+
+-- Returns True if all group''__ids in the union of pending and active
+-- have one resolved event.
+isPotentiallyResolvable = undefined
+
+intersectionBy f a b = Set.intersection (Set.map f a) (Set.map f b)
+startsNewPhrase a b = null $ intersectionBy event''__groupId a b
+
+-- any isMatch eventSet
+-- where
+--   isMatch x = (event''__status x) == Event''Resolved &&
+--               (event''__groupId x) == (event''__groupId event)
+
+partitionFirst [] = Nothing
+partitionFirst (x:[]) = Just (x, [])
+partitionFirst (x:xs) = Just (x, xs)
+
+isPending event pending = memberBy event''__groupId event pending
+
+partitionPending m@(Moment'' _ pending active _) =
+  Set.partition (flip isPending pending) active
+
+addNew'' events m@(Moment'' now pending active result) = do
+  -- TODO: newtypes for these fields
+  guard $ startsNewPhrase events pending
+  return m { moment''__pending = Set.union events pending }
+
+sortEvent'' a b
+  | event''__resolutionPriority a < event''__resolutionPriority b = GT
+  | event''__resolutionPriority a > event''__resolutionPriority b = LT
+  | event''__order a < event''__order b = GT
+  | event''__order a > event''__order b = LT
+  | otherwise = EQ
+
+addPending'' m@(Moment'' now pending active result) = do
+  -- currEvent <- head . sortBy sortEvent'' . Set.toList $ pending
+  currEvent <- nextToInsert pending
+  merged    <- return $ Set.insert currEvent active -- TODO: custom fns, setStart
+  guard $ isValidEventSet merged
+  guard $ canResolve merged
+  return m {
+    moment''__pending  = Set.delete currEvent pending
+    , moment''__active = merged
+    }
+  where
+    isValidEventSet x = True
+    canResolve x      = True
+
+removeActive'' m@(Moment'' now pending active result) = do
+  currEvent <- nextToRemove active
+  active'   <- return $ Set.delete currEvent active -- TODO: custom fns, set stop, applyDecay
+  result'   <- return $ result ++ [currEvent]
+  return m {
+    moment''__active = active'
+    , moment''__result = result'
+    }
+  where
+    sortByPriority = sortBy (comparing event''__resolutionPriority)
+
+getGroups'' :: Set (Event'' a b) -> [[Event'' a b]]
+getGroups'' =
+  f . Set.toList
+  where
+    id         = event''__groupId
+    group'     = (==) `on` id
+    sort'      = sortBy (comparing id)
+    f          = List.groupBy group' . sort'
+
+nextEvent'' sortFn xs = do
+  candidates <- return
+    . catMaybes
+    . fmap (head . sortBy (comparing event''__order))
+    . getGroups''
+    $ xs
+  event <- head . sortFn $ candidates
+  return event
+
+nextToInsert = nextEvent'' $
+               sortBy (comparing event''__resolutionPriority)
+nextToRemove = nextEvent'' $
+               reverse . sortBy (comparing event''__resolutionPriority)
+
+data OijStatus a = OijFailure | OijSuccess a
+  deriving (Eq, Show)
+
+data OijFailure = Done | Pristine | NoPending | NoActive | Diss | CountMax | FalseEq deriving (Eq, Show)
+
+type Oijtype = ([Int], [Int], [Int])
+oij4NextPending :: EitherT OijFailure (State Oijtype) ()
+oij4NextPending = do
+  orig@(pending, active, result) <- get
+  next <- return $ head pending
+  maybe (left NoPending) (modify . insert) next
+  (_, active, result) <- get
+  when (sum active > 14) (left Diss)
+  -- whenM ((> 14) . sum <$> gets (\(_, x, _) -> x)) (left Diss)
+  when (length active > 20) (left CountMax)
+  where
+    insert x (a, b, c) = (drop 1 a, b ++ [0] ++ [x], c)
+
+oij4NextPending2 orig@(a, b, c) = do
+  next@(a', b', c') <- maybe (Left NoPending) (\x -> return $ insert x orig) (head a)
+  when (sum b' > 14) (Left Diss)
+  when (length b' > 20) (Left CountMax)
+  return next
+  where
+    insert x (a, b, c) = (drop 1 a, b ++ [3] ++ [x], c)
+
+oij4NextActive :: EitherT OijFailure (State Oijtype) ()
+oij4NextActive = do
+  (_, active, _) <- get
+  maybe (left NoActive) (\x -> (modify (\(a, b, c) -> (a, drop 1 b, c ++ [] ++ [x])))) (head active)
+
+oij4NextActive2 (a, b, c) = do
+  next <- maybe (Left NoActive) return (head b)
+  return (a, drop 1 b, c ++ [next])
+
+oij4DropActive :: EitherT OijFailure (State Oijtype) ()
+oij4DropActive = do
+  orig@(pending, active, result) <- get
+  put ([], [], result ++ [999] ++ pending ++ active)
+
+oijRun s =
+  case s of
+    (Right (),       s')      -> f oij4NextPending  s'
+    (Left NoPending, s')      -> f oij4NextActive   s'
+    (Left NoActive,  s')      -> s'
+    (Left Diss,      s')      -> f oij4DropActive   s'
+    (Left CountMax,  s')      -> f oij4DropActive   s'
+  where
+    f g x = oijRun $ (runState . runEitherT $ g) x
+
+-- oijRun _ result@([], [], _) = result
+-- oijRun f x =
+--   case result of
+--     (Left NoActive,  _)      -> oijRun oij4DropActive x
+--     (Left Diss,      _)      -> oijRun oij4DropActive x
+--     (Left CountMax,  _)      -> oijRun oij4DropActive x
+--     (Left NoPending, _)      -> oijRun oij4NextActive x
+--     (Right (),       result) -> oijRun oij4NextPending result
+--   where
+--     result = (runState . runEitherT $ f) x
+
+data Moment'' a = Moment'' {
+  moment''__now       :: TimePoint
+  , moment''__pending :: Set (Event'' Int Event'Params)
+  , moment''__active  :: Set (Event'' Int Event'Params)
+  , moment''__result  :: [Event'' Int Event'Params]
   } deriving (Eq, Show)
 
+data Group'' a b = Group'' {
+  group''__id                   :: a
+  , group''__resolutionPriority :: Int
+  , group''__events             :: [b]
+  } deriving (Ord, Eq, Show)
+
+data Event''Status = Event''Pending | Event''Resolved
+  deriving (Ord, Eq, Show)
+
 data Event'' a b = Event'' {
-  event''__start               :: TimePoint
-  , event''__stop              :: TimePoint
-  , event''__minDuration       :: Duration
-  , event''__maxDuration       :: Duration
-  , event''__delta             :: Duration
-  , event''__value             :: a
-  , event''__getNextState      :: b
+  event''__start                :: TimePoint
+  , event''__stop               :: TimePoint
+  , event''__minDuration        :: Duration
+  , event''__maxDuration        :: Duration
+  , event''__delta              :: Duration
+  , event''__value              :: a
+  , event''__groupId            :: Int
+  -- This might seem a bit strange, but it significantly simplifies the code.
+  -- Sets instead of sequences resonates better with the idea of the program;
+  -- insertion/activation order is already dependent on several other parameters.
+  , event''__order              :: Int
+  , event''__resolutionPriority :: Int
+  -- This might not be necessary any more -- an active event is pending if
+  -- `moment''__pending` contains an event with the same groupId.
+  , event''__status             :: Event''Status
+  , event''__transitionParams   :: b
   } deriving (Ord, Eq, Show)

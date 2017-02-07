@@ -31,7 +31,8 @@ library
                        pretty-show,
                        HUnit,
                        monad-loops >= 0.4,
-                       validation
+                       validation,
+                       logict
 
 test-suite sequential-test
  type:                exitcode-stdio-1.0
